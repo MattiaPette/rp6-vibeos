@@ -55,11 +55,15 @@ mcopy -i "$W/esp.img" "$K/rp6.dtb" "::/dtbs/$DTB"
 mkfs.ext4 -q -L "$ROOT_LABEL" -d "$root_src" "$W/root.img" "${ROOT_MB}M"
 
 # GPT image: 1 MiB alignment, ESP then root.
+# p1 is typed "basic data", not ESP: OpenABL reads any FAT partition, and
+# macOS then mounts it on its own (it never automounts an ESP), so logs and
+# files on it are easy to reach from a Mac.
+BASIC_DATA=EBD0A0A2-B9E5-4433-87C0-68B6B72699C7
 total_mb=$(( 1 + ESP_MB + ROOT_MB + 1 ))
 rm -f "$IMG" && truncate -s "${total_mb}M" "$IMG"
 sfdisk -q "$IMG" <<-EOF
 	label: gpt
-	start=1MiB, size=${ESP_MB}MiB, type=uefi, name=rp6-boot
+	start=1MiB, size=${ESP_MB}MiB, type=$BASIC_DATA, name=rp6-boot
 	size=${ROOT_MB}MiB, type=linux, name=$ROOT_LABEL
 EOF
 dd if="$W/esp.img" of="$IMG" bs=1M seek=1 conv=notrunc status=none
