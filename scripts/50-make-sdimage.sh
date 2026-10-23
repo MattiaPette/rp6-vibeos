@@ -7,8 +7,10 @@
 # boot log on screen and stops at "unable to mount root", which is enough to
 # check display, kernel and DTB on the device.
 #
-# No root privileges or loop devices: both filesystems are built in files and
-# copied into the partitioned image.
+# No loop devices: both filesystems are built in files and copied into the
+# partitioned image. Packing a real rootfs needs root, because the Debian tree
+# from 40-build-rootfs.sh holds root-only files and mkfs.ext4 -d must read them
+# and keep their owners; the kernel-only image does not.
 # Write it with: dd if=out/rp6-sd.img of=/dev/<sdcard> bs=4M conv=fsync
 set -euo pipefail
 # shellcheck source=config.env
@@ -21,6 +23,7 @@ rm -rf "$W" && mkdir -p "$W"
 
 ESP_MB=256
 if [ -d "$OUT/rootfs" ]; then
+	[ "$(id -u)" = 0 ] || { echo "packing $OUT/rootfs needs root: sudo $0" >&2; exit 1; }
 	root_src=$OUT/rootfs
 else
 	root_src=$W/empty-root

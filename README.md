@@ -22,7 +22,7 @@ scripts/10-build-kernel.sh             # config RP6 + driver ricavati dal device
 scripts/20-build-audio.sh              # topology AudioReach + UCM
 scripts/30-collect-firmware.sh <dump>  # firmware generici + blob firmati dall'Android stock
 sudo scripts/40-build-rootfs.sh        # Debian minbase + Waydroid + cage
-scripts/50-make-sdimage.sh             # immagine microSD per OpenABL
+sudo scripts/50-make-sdimage.sh        # immagine microSD per OpenABL (senza rootfs basta l'utente normale)
 ```
 
 Le impostazioni comuni sono in `config.env`, il frammento del kernel in `kernel/rp6.config`.
@@ -47,6 +47,14 @@ Se ci sono solo file `.mdt` + `.bNN` serve [pil-squasher](https://github.com/lin
 Il bootloader è [OpenABL](https://github.com/OpenHandheldCollective/OpenABL), lo stesso che
 installa ROCKNIX (versione 1.1 o successiva). Avvia Linux dalla microSD leggendo
 `extlinux/extlinux.conf` dalla partizione FAT.
+
+**Prerequisito:** OpenABL deve essere già installato al posto dell'ABL di Retroid. Con l'ABL
+originale scrivere la microSD non basta, e il menu del punto 3 non esiste. Se non è installato,
+segui le [istruzioni di OpenABL](https://github.com/OpenHandheldCollective/OpenABL#using-it)
+(scrittura di `abl_a` e `abl_b` da fastboot) oppure la
+[guida ROCKNIX per l'RP6](https://rocknix.org/devices/retroid/retroid-pocket-6/), che salva anche
+l'ABL originale. È l'unico passo che scrive sulla memoria interna: prima fai un backup.
+Per controllare la versione: `fastboot getvar version-bootloader`.
 
 1. `scripts/50-make-sdimage.sh` crea `out/rp6-sd.img`: partizione FAT con kernel, DTB ed
    extlinux.conf, poi la partizione ext4 `rp6-root`. Senza rootfs crea un'immagine di solo
