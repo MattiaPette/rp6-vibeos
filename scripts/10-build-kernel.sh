@@ -3,7 +3,7 @@
 #   1. arm64 defconfig with every non-Qualcomm platform switched off
 #   2. + driver symbols resolved from the RP6 device tree (dt2config.py)
 #   3. + kernel/rp6.config, last so its choices win
-# Output: $OUT/kernel/{Image.gz,rp6.dtb,modules/}
+# Output: $OUT/kernel/{Image,rp6.dtb,modules/}
 set -euo pipefail
 # shellcheck source=config.env
 . "$(dirname "$0")/../config.env"
@@ -35,10 +35,10 @@ grep -hE '^CONFIG_' "$TOP/kernel/rp6.config" | while IFS= read -r want; do
 	grep -qxF "$want" "$B/.config" || echo "not applied: $want"
 done | tee "$B/not-applied.txt"
 
-mk Image.gz modules "$DTB"
+mk Image modules "$DTB"
 rm -rf "$OUT/kernel/modules"
 mk INSTALL_MOD_PATH="$OUT/kernel/modules" INSTALL_MOD_STRIP=1 modules_install
-cp "$B/arch/arm64/boot/Image.gz" "$OUT/kernel/Image.gz"
+cp "$B/arch/arm64/boot/Image" "$OUT/kernel/Image"
 cp "$B/arch/arm64/boot/dts/$DTB" "$OUT/kernel/rp6.dtb"
 cp "$B/.config" "$OUT/kernel/config"
-echo "kernel: $(du -h "$OUT/kernel/Image.gz" | cut -f1), modules: $(du -sh "$OUT/kernel/modules" | cut -f1)"
+echo "kernel: $(du -h "$OUT/kernel/Image" | cut -f1), modules: $(du -sh "$OUT/kernel/modules" | cut -f1)"
