@@ -51,9 +51,11 @@ for t in "$K"/dtbs-test/*.dtb; do
 	printf 'LABEL %s\n  LINUX /Image\n  FDT /dtbs/test/%s.dtb\n  APPEND %s\n' "$n" "$n" "$CMDLINE" >> "$W/extlinux.conf"
 done
 # Experimental KGSL entry (15-build-kgsl.sh): its tree gives the GPU to KGSL,
-# so the kgsl-shim that fakes KGSL on top of msm must stay unloaded.
+# so the kgsl-shim that fakes KGSL on top of msm must stay unloaded, and msm
+# must not expose a render node that the shim's udev rule would turn into
+# /dev/kgsl-3d0 (separate_gpu_kms: a display-only msm device has none).
 if [ -f "$OUT/kgsl/rp6-kgsl.dtb" ]; then
-	printf 'LABEL rp6-vibeos-kgsl\n  LINUX /Image\n  FDT /dtbs/kgsl/rp6-kgsl.dtb\n  APPEND %s modprobe.blacklist=kgsl_shim\n' "$CMDLINE" >> "$W/extlinux.conf"
+	printf 'LABEL rp6-vibeos-kgsl\n  LINUX /Image\n  FDT /dtbs/kgsl/rp6-kgsl.dtb\n  APPEND %s modprobe.blacklist=kgsl_shim msm.separate_gpu_kms=1\n' "$CMDLINE" >> "$W/extlinux.conf"
 fi
 truncate -s "${ESP_MB}M" "$W/esp.img"
 mkfs.vfat -F 32 -n RP6BOOT "$W/esp.img" >/dev/null

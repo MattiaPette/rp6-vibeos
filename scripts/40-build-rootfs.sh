@@ -53,13 +53,15 @@ chroot_run apt-get install -y \
 	pipewire pipewire-pulse wireplumber alsa-ucm-conf \
 	seatd zram-tools \
 	kmscube vulkan-tools alsa-utils \
-	fdisk
+	fdisk openresolv
 chroot_run apt-get clean
 if [ -n "${BUILD_CA:-}" ]; then
 	rm "$R/usr/local/share/ca-certificates/rp6-build-ca.crt"
 	chroot_run update-ca-certificates --fresh >/dev/null
 fi
 rm -rf "$R"/var/lib/apt/lists/*
+# debootstrap copied the build host's resolvers; iwd writes the real ones.
+rm -f "$R/etc/resolv.conf"
 
 # Retroid audio files, firmware and kernel modules from the earlier steps.
 # tar, not cp: /lib is a symlink to usr/lib in Debian and must stay one.
@@ -93,12 +95,16 @@ cat > "$R/etc/fstab" <<-EOF
 	PARTLABEL=rp6-boot     /boot  vfat  defaults,noatime,umask=0077  0 2
 EOF
 
-# Wi-Fi: iwd does DHCP itself. Credentials come from wifi.txt on the FAT
-# partition (two lines: network name, password), which is easy to write
-# from any computer before the first boot.
+# Wi-Fi: iwd does DHCP itself and hands the DNS servers to resolvconf, which
+# needs no daemon (iwd's default is systemd-resolved). Credentials come from
+# wifi.txt on the FAT partition (two lines: network name, password), which is
+# easy to write from any computer before the first boot.
 install -Dm644 /dev/stdin "$R/etc/iwd/main.conf" <<-'EOF'
 	[General]
 	EnableNetworkConfiguration=true
+
+	[Network]
+	NameResolvingService=resolvconf
 EOF
 install -Dm755 /dev/stdin "$R/usr/local/sbin/rp6-wifi-from-boot" <<-'EOF'
 	#!/bin/sh
@@ -109,9 +115,15 @@ install -Dm755 /dev/stdin "$R/usr/local/sbin/rp6-wifi-from-boot" <<-'EOF'
 	ssid=$(sed -n 1p "$f" | tr -d '\r')
 	pass=$(sed -n 2p "$f" | tr -d '\r')
 	[ -n "$ssid" ] || exit 0
+	# iwd names profiles after the SSID only when it is plain alphanumeric,
+	# space, - or _; any other SSID is written as = and its hex bytes.
+	case $ssid in
+	*[!A-Za-z0-9\ _-]*) name="=$(printf %s "$ssid" | od -An -tx1 | tr -d ' \n')" ;;
+	*) name=$ssid ;;
+	esac
 	mkdir -p /var/lib/iwd
-	printf '[Security]\nPassphrase=%s\n' "$pass" > "/var/lib/iwd/$ssid.psk"
-	chmod 600 "/var/lib/iwd/$ssid.psk"
+	umask 077
+	printf '[Security]\nPassphrase=%s\n' "$pass" > "/var/lib/iwd/$name.psk"
 	rm -f "$f"
 EOF
 install -Dm644 /dev/stdin "$R/etc/systemd/system/rp6-wifi-from-boot.service" <<-'EOF'
@@ -167,15 +179,17 @@ install -Dm644 /dev/stdin "$R/etc/systemd/system/waydroid-firstboot.service" <<-
 	Wants=network-online.target
 	After=network-online.target
 	Before=waydroid-container.service kiosk.service
-	ConditionPathExists=!/var/lib/waydroid/waydroid.cfg
+	# waydroid init writes waydroid.cfg before downloading, so it is no proof
+	# that the images are there: use a marker written only on success.
+	ConditionPathExists=!/var/lib/rp6-waydroid-ready
 
 	[Service]
 	Type=oneshot
-	ExecStart=/usr/bin/waydroid init
+	# iwd does not report "online", so retry within this one start job: the
+	# container and the kiosk stay ordered after a successful init.
+	ExecStart=/bin/sh -c 'until /usr/bin/waydroid init; do sleep 30; done'
+	ExecStartPost=/usr/bin/touch /var/lib/rp6-waydroid-ready
 	TimeoutStartSec=infinity
-	# iwd does not report "online", so retry until the download works.
-	Restart=on-failure
-	RestartSec=30
 
 	[Install]
 	WantedBy=multi-user.target
