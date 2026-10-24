@@ -1,0 +1,31 @@
+name: Turnip for msm (DroidDeck Linux driver)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mesa_version:
+        description: Mesa release to build
+        default: 26.2.5
+  pull_request:
+    paths: [gpu/turnip/**, .github/workflows/turnip-msm.yml]
+  push:
+    branches: [main]
+    paths: [gpu/turnip/**, .github/workflows/turnip-msm.yml]
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    container: debian:trixie
+    steps:
+      - name: Install git
+        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates git
+      - uses: actions/checkout@v4
+      - name: Build
+        env:
+          MESA_VERSION: ${{ inputs.mesa_version || '26.2.5' }}
+        run: gpu/turnip/build.sh --install-deps
+      - uses: actions/upload-artifact@v4
+        with:
+          name: turnip-msm-Linux
+          path: out/turnip/*.zip
+          if-no-files-found: error

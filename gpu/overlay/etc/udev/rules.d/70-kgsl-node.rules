@@ -1,0 +1,7 @@
+# DroidDeck only offers its GPU path when /dev/kgsl-3d0 exists, and binds that
+# node into its Linux runtime as the render node. Make it a second node for the
+# msm render node itself, so everything behind it speaks plain msm DRM.
+# A real node, not a symlink: Waydroid bind-mounts it into the container.
+SUBSYSTEM=="drm", KERNEL=="renderD*", DRIVERS=="msm*", ACTION=="add", MODE="0666", \
+	RUN+="/bin/sh -c 'rm -f /dev/kgsl-3d0; mknod -m 0666 /dev/kgsl-3d0 c $major $minor'"
+SUBSYSTEM=="drm", KERNEL=="renderD*", ACTION=="remove", RUN+="/bin/rm -f /dev/kgsl-3d0"

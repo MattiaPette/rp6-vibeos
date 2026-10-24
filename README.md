@@ -11,7 +11,8 @@ DXVK and their updates stay managed by DroidDeck.
 > Status: early prototype. The kernel-only test image boots from microSD and shows the kernel
 > log on the built-in display; the full rootfs has not been booted yet. GPU support inside
 > DroidDeck still needs work: DroidDeck looks for the Android KGSL driver (`/dev/kgsl-3d0`),
-> which the mainline kernel does not have.
+> which the mainline kernel does not have. [gpu/](gpu/README.md) is the prototype that gives the
+> msm driver a KGSL face, plus an msm Turnip that DroidDeck can import.
 
 ## Build
 
@@ -23,6 +24,7 @@ On an x86_64 or arm64 Linux host with `gcc-aarch64-linux-gnu`, `bc`, `flex`, `bi
 scripts/01-fetch-sources.sh            # kernel, topology, UCM, linux-firmware (only the files needed)
 scripts/10-build-kernel.sh             # RP6 config + drivers derived from the device tree
 scripts/15-build-kgsl.sh               # optional, experimental: KGSL GPU driver + its DTB
+scripts/16-build-kgsl-shim.sh          # or instead: msm + a KGSL-style sysfs and node for DroidDeck (gpu/README.md)
 scripts/20-build-audio.sh              # AudioReach topology + UCM
 scripts/30-collect-firmware.sh <dump>  # generic firmware + signed blobs from stock Android
 sudo scripts/40-build-rootfs.sh        # Debian minbase + Waydroid + cage
