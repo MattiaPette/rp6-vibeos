@@ -31,9 +31,12 @@ sudo scripts/40-build-rootfs.sh        # Debian minbase + Waydroid + cage (BUILD
 sudo scripts/50-make-sdimage.sh        # microSD image for OpenABL (no root needed without a rootfs)
 ```
 
-Shared settings live in `config.env`, the kernel config fragment in `kernel/rp6.config`.
+Shared settings live in `config.env`, the kernel config fragments in `kernel/`.
 `scripts/dt2config.py` reads the RP6 DTB and enables the driver for every active node, so the
-config does not have to be written by hand.
+config does not have to be written by hand. `kernel/rp6-slim.config` and a generated filter
+drop what arm64 defconfig builds for other hardware (other Qualcomm SoCs, NICs, cameras, codecs,
+Type-C chips...), and `kernel/rp6.config` comes last with the RP6's own choices. The build
+prints any symbol the device tree or `rp6.config` asks for that Kconfig refused.
 
 ## Experimental: Qualcomm KGSL GPU driver
 
