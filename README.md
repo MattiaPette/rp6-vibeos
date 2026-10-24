@@ -13,8 +13,8 @@ DXVK e i loro aggiornamenti restano gestiti da DroidDeck.
 ## Build
 
 Su un host Linux x86_64 o arm64 con `gcc-aarch64-linux-gnu`, `bc`, `flex`, `bison`,
-`libssl-dev`, `device-tree-compiler`, `m4`, `alsa-utils` (`alsatplg`), `mkbootimg`,
-`debootstrap`, `qemu-user-static`, `zstd`:
+`libssl-dev`, `device-tree-compiler`, `m4`, `alsa-utils` (`alsatplg`), `dosfstools`,
+`mtools`, `e2fsprogs`, `fdisk` (`sfdisk`), `debootstrap`, `qemu-user-static`, `zstd`:
 
 ```sh
 scripts/01-fetch-sources.sh            # kernel, topology, UCM, linux-firmware (solo i file utili)
@@ -22,12 +22,8 @@ scripts/10-build-kernel.sh             # config RP6 + driver ricavati dal device
 scripts/20-build-audio.sh              # topology AudioReach + UCM
 scripts/30-collect-firmware.sh <dump>  # firmware generici + blob firmati dall'Android stock
 sudo scripts/40-build-rootfs.sh        # Debian minbase + Waydroid + cage
-scripts/50-make-bootimg.sh             # boot.img per l'ABL
+sudo scripts/50-make-sdimage.sh        # immagine microSD per OpenABL (senza rootfs basta l'utente normale)
 ```
-
-Alcuni pacchetti `mkbootimg` di Debian/Ubuntu non includono il modulo Python `gki`, che
-serve solo per firmare immagini GKI: se lo script fallisce con `No module named 'gki'`,
-usa `mkbootimg` da AOSP (`system/tools/mkbootimg`).
 
 Le impostazioni comuni sono in `config.env`, il frammento del kernel in `kernel/rp6.config`.
 `scripts/dt2config.py` legge il DTB dell'RP6 e abilita i driver di ogni nodo attivo, così il
@@ -46,8 +42,24 @@ adb pull /vendor/dsp           dump/dsp
 
 Se ci sono solo file `.mdt` + `.bNN` serve [pil-squasher](https://github.com/linux-msm/pil-squasher).
 
-## Primo avvio (senza toccare Android)
+## Primo avvio (Android resta intatto)
 
-1. Sblocca il bootloader e fai il backup di tutte le partizioni.
-2. Scrivi il rootfs nella prima partizione ext4 della microSD (`root=/dev/mmcblk0p1`).
-3. `fastboot boot out/boot.img`: avvia una volta dalla RAM e non scrive niente sul device.
+Il bootloader è [OpenABL](https://github.com/OpenHandheldCollective/OpenABL), lo stesso che
+installa ROCKNIX (versione 1.1 o successiva). Avvia Linux dalla microSD leggendo
+`extlinux/extlinux.conf` dalla partizione FAT.
+
+**Prerequisito:** OpenABL deve essere già installato al posto dell'ABL di Retroid. Con l'ABL
+originale scrivere la microSD non basta, e il menu del punto 3 non esiste. Se non è installato,
+segui le [istruzioni di OpenABL](https://github.com/OpenHandheldCollective/OpenABL#using-it)
+(scrittura di `abl_a` e `abl_b` da fastboot) oppure la
+[guida ROCKNIX per l'RP6](https://rocknix.org/devices/retroid/retroid-pocket-6/), che salva anche
+l'ABL originale. È l'unico passo che scrive sulla memoria interna: prima fai un backup.
+Per controllare la versione: `fastboot getvar version-bootloader`.
+
+1. `scripts/50-make-sdimage.sh` crea `out/rp6-sd.img`: partizione FAT con kernel, DTB ed
+   extlinux.conf, poi la partizione ext4 `rp6-root`. Senza rootfs crea un'immagine di solo
+   kernel, utile per controllare schermo e log di avvio.
+2. Scrivila sulla microSD: `dd if=out/rp6-sd.img of=/dev/<sd> bs=4M conv=fsync`
+   (oppure con balenaEtcher o Raspberry Pi Imager).
+3. Accendi tenendo Vol giù, imposta *Boot mode* su Linux e *Boot source* su SD card, poi *Start*.
+   Con Vol su all'accensione si torna ad Android.

@@ -24,7 +24,7 @@ rm -rf "$OUT/firmware" && mkdir -p "$D"
 for f in qcom/a740_sqe.fw qcom/gmu_gen70200.bin; do
 	install -Dm644 "$FW/$f" "$D/$f"
 done
-(cd "$FW" && cp -r --parents ath12k/WCN7850 qcom/vpu qca/hmt* "$D/")
+(cd "$FW" && cp -r --parents ath12k/WCN7850 qcom/vpu/vpu30_p4* qca/hmt* "$D/")
 
 # Device-signed blobs: <name in the stock dump> <path the RP6 DTS asks for>
 R=qcom/sm8550/retroidpocket
