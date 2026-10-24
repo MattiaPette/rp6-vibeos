@@ -1,7 +1,8 @@
 #!/bin/sh
 # Prototype: games without Android. Run as root on a booted RP6 image.
 #
-#   native Steam client (Valve's ARM64 public beta) inside gamescope on DRM
+#   native Steam client (Valve's ARM64 public beta) inside cage on DRM
+#   (gamescope is not packaged for arm64 in Debian trixie or sid)
 #   -> Proton ARM64 (Steam downloads it; it carries FEX for x86 games)
 #   -> DXVK/VKD3D -> Mesa Turnip on the mainline msm driver
 #
@@ -19,7 +20,7 @@ if [ "${1:-}" = off ]; then
 fi
 
 apt-get update
-apt-get install -y gamescope xwayland mesa-vulkan-drivers vulkan-tools \
+apt-get install -y cage wlr-randr xwayland mesa-vulkan-drivers vulkan-tools \
 	libgtk2.0-0t64 libnss3 libvdpau1 libxss1 libpci3 libvpx9 unzip
 
 # Valve's ARM64 bootstrap, the same steps the Asahi community scripts use.
@@ -46,10 +47,16 @@ fi
 echo "missing libraries:"
 LD_LIBRARY_PATH=$S/steamrtarm64 ldd "$S/steamrtarm64/steam" | grep 'not found' || echo "  none"
 
-# The panel is natively portrait (1080x1920): gamescope rotates it itself.
+# The panel is natively portrait (1080x1920): rotate it from inside cage.
+install -Dm755 /dev/stdin /usr/local/bin/rp6-steam-launch <<-'WRAP'
+	#!/bin/sh
+	out=$(wlr-randr | awk '/^[^ ]/{print $1; exit}')
+	[ -n "$out" ] && wlr-randr --output "$out" --transform 90
+	exec /home/deck/.local/share/Steam/steamrtarm64/steam -gamepadui -noverifyfiles
+WRAP
 install -Dm644 /dev/stdin /etc/systemd/system/steam-session.service <<-'UNIT'
 	[Unit]
-	Description=Steam Big Picture in gamescope
+	Description=Steam Big Picture in cage
 	After=systemd-user-sessions.service network-online.target
 	Conflicts=kiosk.service
 
@@ -58,10 +65,11 @@ install -Dm644 /dev/stdin /etc/systemd/system/steam-session.service <<-'UNIT'
 	PAMName=login
 	TTYPath=/dev/tty1
 	StandardInput=tty
+	UtmpIdentifier=tty1
+	UtmpMode=user
 	Environment=LD_LIBRARY_PATH=/home/deck/.local/share/Steam/steamrtarm64
-	ExecStart=/usr/bin/gamescope --backend drm --force-orientation left \
-		-W 1920 -H 1080 -f -e -- \
-		/home/deck/.local/share/Steam/steamrtarm64/steam -gamepadui -noverifyfiles
+	Environment=WLR_NO_HARDWARE_CURSORS=1
+	ExecStart=/usr/bin/cage -s -- /usr/local/bin/rp6-steam-launch
 	Restart=on-failure
 	RestartSec=5
 
