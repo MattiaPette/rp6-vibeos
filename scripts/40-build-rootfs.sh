@@ -286,7 +286,7 @@ install -Dm644 /dev/stdin "$R/etc/rp6/weston.ini" <<-'EOF2'
 
 	[output]
 	name=DSI-1
-	transform=rotate-270
+	transform=rotate-90
 
 	[autolaunch]
 	path=/usr/local/bin/rp6-waydroid-ui
