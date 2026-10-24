@@ -1,0 +1,873 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 24 Oct 2026 12:33:28 +0000
+Subject: [PATCH] Build KGSL against the RetroidPocket 7.3 mainline kernel
+
+Mechanical port of Qualcomm's graphics-kernel (as shipped in LineageOS
+sm8750 modules, kernel 6.6 era) to mainline 7.3, enough to build
+msm_kgsl.ko out of tree. Untested on hardware.
+
+Kernel API changes handled:
+- platform_driver.remove returns void
+- MODULE_IMPORT_NS() takes a string
+- dma_fence_ops lost fence_value_str/timeline_value_str/use_64bit_seqno
+  (64-bit seqno now comes from dma_fence_init64()), __dma_fence_is_later()
+  takes the fence, dma_fence_array_create() lost signal-on-any
+- mm->get_unmapped_area became mm_get_unmapped_area(), and
+  __get_unmapped_area() is no longer exported
+- dma_buf_attachment.dma_map_attrs is gone
+- iommu_domain_alloc(bus) became iommu_paging_domain_alloc(dev)
+- thermal_of_cooling_device_register() takes a cooling device id
+- bin_attribute callbacks take a const attribute
+- del_timer*() renamed timer_delete*(), nth_page() removed,
+  drivers/devfreq/governor.h became linux/devfreq-governor.h
+
+Downstream-only kernel features, stubbed in compat/ (all optional for
+plain rendering): qcom-iommu-util and qcom io-pgtable (context bank is
+always 0 on mainline arm-smmu-qcom), msm_hw_fence/synx, TZ GPU DCVS
+SCM calls, qcom_dcvs L3 voting, socinfo part info, mem-buf/secure
+buffers, minidump, sysstats, msm_performance. SCM calls with a mainline
+equivalent are mapped (gpu smmu aperture, gpu init regs, pas shutdown).
+
+config/rp6.conf: kalama settings without coresight and with the
+simple_ondemand devfreq governor, selected with KGSL_RP6=y.
+---
+ Kbuild                             |  5 ++++-
+ adreno.c                           |  6 ++----
+ adreno_a6xx_gmu.c                  |  3 +--
+ adreno_a6xx_rgmu.c                 |  3 +--
+ adreno_gen7_gmu.c                  |  3 +--
+ adreno_gen7_hwsched_hfi.c          |  3 ---
+ adreno_gen8_gmu.c                  |  3 +--
+ adreno_gen8_hwsched_hfi.c          |  3 ---
+ adreno_hwsched.c                   |  3 ---
+ compat/dt-bindings/soc/qcom,ipcc.h |  2 ++
+ compat/governor.h                  |  2 ++
+ compat/kgsl_mainline.h             | 24 ++++++++++++++++++++++
+ compat/kgsl_scm.h                  | 25 +++++++++++++++++++++++
+ compat/linux/mailbox/qmp.h         |  7 +++++++
+ compat/linux/mem-buf.h             |  8 ++++++++
+ compat/linux/msm_sysstats.h        |  6 ++++++
+ compat/linux/qcom-io-pgtable.h     | 18 +++++++++++++++++
+ compat/linux/qcom-iommu-util.h     | 26 ++++++++++++++++++++++++
+ compat/linux/qtee_shmbridge.h      | 10 ++++++++++
+ compat/msm_hw_fence.h              | 23 +++++++++++++++++++++
+ compat/soc/qcom/dcvs.h             | 14 +++++++++++++
+ compat/soc/qcom/msm_performance.h  |  8 ++++++++
+ compat/soc/qcom/of_common.h        |  7 +++++++
+ compat/soc/qcom/secure_buffer.h    | 10 ++++++++++
+ compat/soc/qcom/socinfo.h          | 14 +++++++++++++
+ config/rp6.conf                    | 11 ++++++++++
+ kgsl.c                             |  9 ++++-----
+ kgsl_bus.c                         |  2 +-
+ kgsl_gmu_core.c                    |  5 +++--
+ kgsl_iommu.c                       | 32 ++++++------------------------
+ kgsl_mmu.c                         |  5 ++---
+ kgsl_pwrctrl.c                     |  2 +-
+ kgsl_snapshot.c                    |  4 ++--
+ kgsl_sync.c                        | 13 ++++--------
+ kgsl_timeline.c                    | 17 +++++++++-------
+ 35 files changed, 258 insertions(+), 78 deletions(-)
+ create mode 100644 compat/dt-bindings/soc/qcom,ipcc.h
+ create mode 100644 compat/governor.h
+ create mode 100644 compat/kgsl_mainline.h
+ create mode 100644 compat/kgsl_scm.h
+ create mode 100644 compat/linux/mailbox/qmp.h
+ create mode 100644 compat/linux/mem-buf.h
+ create mode 100644 compat/linux/msm_sysstats.h
+ create mode 100644 compat/linux/qcom-io-pgtable.h
+ create mode 100644 compat/linux/qcom-iommu-util.h
+ create mode 100644 compat/linux/qtee_shmbridge.h
+ create mode 100644 compat/msm_hw_fence.h
+ create mode 100644 compat/soc/qcom/dcvs.h
+ create mode 100644 compat/soc/qcom/msm_performance.h
+ create mode 100644 compat/soc/qcom/of_common.h
+ create mode 100644 compat/soc/qcom/secure_buffer.h
+ create mode 100644 compat/soc/qcom/socinfo.h
+ create mode 100644 config/rp6.conf
+
+diff --git a/Kbuild b/Kbuild
+index 30990db..0c9c3b4 100644
+--- a/Kbuild
++++ b/Kbuild
+@@ -13,6 +13,9 @@ ifeq ($(CONFIG_QTI_QUIN_GVM),)
+ 	endif
+ endif
+ 
++ifeq ($(KGSL_RP6), y)
++	include $(KGSL_PATH)/config/rp6.conf
++endif
+ ifeq ($(CONFIG_ARCH_WAIPIO), y)
+ 	include $(KGSL_PATH)/config/gki_waipiodisp.conf
+ endif
+@@ -86,7 +89,7 @@ ifeq ($(CONFIG_ARCH_KERA), y)
+ 	subdir-ccflags-y += $(LE_EXTRA_CFLAGS)
+ endif
+ 
+-ccflags-y += -I$(KGSL_PATH) -I$(KGSL_PATH)/include/linux -I$(KGSL_PATH)/include -I$(KERNEL_SRC)/drivers/devfreq
++ccflags-y += -include $(KGSL_PATH)/compat/kgsl_mainline.h -I$(KGSL_PATH)/compat -I$(KGSL_PATH) -I$(KGSL_PATH)/include/linux -I$(KGSL_PATH)/include -I$(KERNEL_SRC)/drivers/devfreq
+ ccflags-y += \
+ 		-I$(KGSL_PATH)/../synx-kernel/include/uapi/synx/media \
+ 		-I$(KGSL_PATH)/../synx-kernel/msm/synx
+diff --git a/adreno.c b/adreno.c
+index a70c238..dc54105 100644
+--- a/adreno.c
++++ b/adreno.c
+@@ -3774,11 +3774,9 @@ static int adreno_probe(struct platform_device *pdev)
+ 			&adreno_ops, match);
+ }
+ 
+-static int adreno_remove(struct platform_device *pdev)
++static void adreno_remove(struct platform_device *pdev)
+ {
+ 	component_master_del(&pdev->dev, &adreno_ops);
+-
+-	return 0;
+ }
+ 
+ #if IS_ENABLED(CONFIG_QCOM_KGSL_HIBERNATION)
+@@ -4058,5 +4056,5 @@ MODULE_DESCRIPTION("3D Graphics driver");
+ MODULE_LICENSE("GPL v2");
+ MODULE_SOFTDEP("pre: arm_smmu nvmem_qfprom socinfo governor_msm_adreno_tz governor_gpubw_mon");
+ #if (KERNEL_VERSION(5, 18, 0) <= LINUX_VERSION_CODE)
+-MODULE_IMPORT_NS(DMA_BUF);
++MODULE_IMPORT_NS("DMA_BUF");
+ #endif
+diff --git a/adreno_a6xx_gmu.c b/adreno_a6xx_gmu.c
+index 7957247..000c3dd 100644
+--- a/adreno_a6xx_gmu.c
++++ b/adreno_a6xx_gmu.c
+@@ -3782,10 +3782,9 @@ static int a6xx_gmu_probe_dev(struct platform_device *pdev)
+ 	return component_add(&pdev->dev, &a6xx_gmu_component_ops);
+ }
+ 
+-static int a6xx_gmu_remove_dev(struct platform_device *pdev)
++static void a6xx_gmu_remove_dev(struct platform_device *pdev)
+ {
+ 	component_del(&pdev->dev, &a6xx_gmu_component_ops);
+-	return 0;
+ }
+ 
+ static const struct of_device_id a6xx_gmu_match_table[] = {
+diff --git a/adreno_a6xx_rgmu.c b/adreno_a6xx_rgmu.c
+index c8c0da3..ed93d43 100644
+--- a/adreno_a6xx_rgmu.c
++++ b/adreno_a6xx_rgmu.c
+@@ -1372,10 +1372,9 @@ static int a6xx_rgmu_probe_dev(struct platform_device *pdev)
+ 	return component_add(&pdev->dev, &a6xx_rgmu_component_ops);
+ }
+ 
+-static int a6xx_rgmu_remove_dev(struct platform_device *pdev)
++static void a6xx_rgmu_remove_dev(struct platform_device *pdev)
+ {
+ 	component_del(&pdev->dev, &a6xx_rgmu_component_ops);
+-	return 0;
+ }
+ 
+ static const struct of_device_id a6xx_rgmu_match_table[] = {
+diff --git a/adreno_gen7_gmu.c b/adreno_gen7_gmu.c
+index b8dc373..dbadab4 100644
+--- a/adreno_gen7_gmu.c
++++ b/adreno_gen7_gmu.c
+@@ -3406,10 +3406,9 @@ static int gen7_gmu_probe_dev(struct platform_device *pdev)
+ 	return component_add(&pdev->dev, &gen7_gmu_component_ops);
+ }
+ 
+-static int gen7_gmu_remove_dev(struct platform_device *pdev)
++static void gen7_gmu_remove_dev(struct platform_device *pdev)
+ {
+ 	component_del(&pdev->dev, &gen7_gmu_component_ops);
+-	return 0;
+ }
+ 
+ static const struct of_device_id gen7_gmu_match_table[] = {
+diff --git a/adreno_gen7_hwsched_hfi.c b/adreno_gen7_hwsched_hfi.c
+index bae34ae..7037b48 100644
+--- a/adreno_gen7_hwsched_hfi.c
++++ b/adreno_gen7_hwsched_hfi.c
+@@ -824,9 +824,6 @@ static void set_fence_signal_bit(struct adreno_device *adreno_dev,
+ 	char name[KGSL_FENCE_NAME_LEN];
+ 	char value[32] = "unknown";
+ 
+-	if (fence->ops->timeline_value_str)
+-		fence->ops->timeline_value_str(fence, value, sizeof(value));
+-
+ 	if (test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &fence->flags)) {
+ 		dev_err(gmu_pdev_dev,
+ 			"GMU is waiting for signaled fence(ctx:%llu seqno:%llu value:%s)\n",
+diff --git a/adreno_gen8_gmu.c b/adreno_gen8_gmu.c
+index 0680515..b097492 100644
+--- a/adreno_gen8_gmu.c
++++ b/adreno_gen8_gmu.c
+@@ -3188,10 +3188,9 @@ static int gen8_gmu_probe_dev(struct platform_device *pdev)
+ 	return component_add(&pdev->dev, &gen8_gmu_component_ops);
+ }
+ 
+-static int gen8_gmu_remove_dev(struct platform_device *pdev)
++static void gen8_gmu_remove_dev(struct platform_device *pdev)
+ {
+ 	component_del(&pdev->dev, &gen8_gmu_component_ops);
+-	return 0;
+ }
+ 
+ static const struct of_device_id gen8_gmu_match_table[] = {
+diff --git a/adreno_gen8_hwsched_hfi.c b/adreno_gen8_hwsched_hfi.c
+index 46d5074..f932b41 100644
+--- a/adreno_gen8_hwsched_hfi.c
++++ b/adreno_gen8_hwsched_hfi.c
+@@ -711,9 +711,6 @@ static void set_fence_signal_bit(struct adreno_device *adreno_dev,
+ 	char name[KGSL_FENCE_NAME_LEN];
+ 	char value[32] = "unknown";
+ 
+-	if (fence->ops->timeline_value_str)
+-		fence->ops->timeline_value_str(fence, value, sizeof(value));
+-
+ 	if (test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &fence->flags)) {
+ 		dev_err(GMU_PDEV_DEV(KGSL_DEVICE(adreno_dev)),
+ 			"GMU is waiting for signaled fence(ctx:%llu seqno:%llu value:%s)\n",
+diff --git a/adreno_hwsched.c b/adreno_hwsched.c
+index 60b3f6a..aa849ea 100644
+--- a/adreno_hwsched.c
++++ b/adreno_hwsched.c
+@@ -1646,9 +1646,6 @@ static void _print_syncobj(struct adreno_device *adreno_dev, struct kgsl_drawobj
+ 		bool signaled = test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &fence->flags);
+ 		char value[32] = "unknown";
+ 
+-		if (fence->ops->timeline_value_str)
+-			fence->ops->timeline_value_str(fence, value, sizeof(value));
+-
+ 		dev_err(device->dev,
+ 			"dma fence[%d] signaled:%d kgsl:%d ctx:%llu seqno:%llu value:%s\n",
+ 			i, signaled, kgsl, fence->context, fence->seqno, value);
+diff --git a/compat/dt-bindings/soc/qcom,ipcc.h b/compat/dt-bindings/soc/qcom,ipcc.h
+new file mode 100644
+index 0000000..0f77c0a
+--- /dev/null
++++ b/compat/dt-bindings/soc/qcom,ipcc.h
+@@ -0,0 +1,2 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#include <dt-bindings/mailbox/qcom-ipcc.h>
+diff --git a/compat/governor.h b/compat/governor.h
+new file mode 100644
+index 0000000..00a5918
+--- /dev/null
++++ b/compat/governor.h
+@@ -0,0 +1,2 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#include <linux/devfreq-governor.h>
+diff --git a/compat/kgsl_mainline.h b/compat/kgsl_mainline.h
+new file mode 100644
+index 0000000..c4270be
+--- /dev/null
++++ b/compat/kgsl_mainline.h
+@@ -0,0 +1,24 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/* Force-included in every KGSL object: renames and headers mainline moved. */
++#ifndef _KGSL_MAINLINE_H
++#define _KGSL_MAINLINE_H
++#include <linux/vmalloc.h>
++#include <linux/of.h>
++#include <linux/timer.h>
++#include <linux/remoteproc.h>
++#include "kgsl_scm.h"
++
++/* No LLC no-write-allocate hint on mainline */
++#define IOMMU_SYS_CACHE_NWA			0
++#define IO_PGTABLE_QUIRK_QCOM_USE_LLC_NWA	0
++
++/* Downstream clock debug helper and SOCCP power vote */
++#define qcom_clk_dump(clk, regulator, calltrace)	do { } while (0)
++static inline int rproc_set_state(struct rproc *rproc, bool on) { return -EOPNOTSUPP; }
++
++#define del_timer_sync	timer_delete_sync
++#define del_timer	timer_delete
++
++/* struct pages of one sg entry are always contiguous in the memmap now */
++#define nth_page(page, n)	((page) + (n))
++#endif
+diff --git a/compat/kgsl_scm.h b/compat/kgsl_scm.h
+new file mode 100644
+index 0000000..c9853b0
+--- /dev/null
++++ b/compat/kgsl_scm.h
+@@ -0,0 +1,25 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/*
++ * Downstream SCM calls mapped onto their mainline names. The TZ GPU DCVS
++ * service has no mainline driver, so those calls report it as absent.
++ */
++#ifndef _KGSL_COMPAT_SCM_H
++#define _KGSL_COMPAT_SCM_H
++#include <linux/firmware/qcom/qcom_scm.h>
++
++#define qcom_scm_kgsl_set_smmu_aperture(cb)	qcom_scm_set_gpu_smmu_aperture(cb)
++#define qcom_scm_kgsl_init_regs(req)		qcom_scm_gpu_init_regs(req)
++#define qcom_scm_pas_shutdown_retry(pas)	qcom_scm_pas_shutdown(pas)
++
++static inline int qcom_scm_kgsl_set_smmu_lpac_aperture(unsigned int cb) { return -EOPNOTSUPP; }
++static inline int qcom_scm_kgsl_dcvs_tuning(u32 mingap, u32 penalty, u32 numbusy) { return -ENODEV; }
++static inline int qcom_scm_io_reset(void) { return -ENODEV; }
++static inline int qcom_scm_dcvs_reset(void) { return -ENODEV; }
++static inline int qcom_scm_dcvs_update(int level, s64 total, s64 busy) { return -ENODEV; }
++static inline int qcom_scm_dcvs_update_v2(int level, s64 total, s64 busy) { return -ENODEV; }
++static inline int qcom_scm_dcvs_update_ca_v2(int level, s64 total, s64 busy, int ctx) { return -ENODEV; }
++static inline int qcom_scm_dcvs_init_v2(phys_addr_t addr, size_t size, unsigned int *version) { return -ENODEV; }
++static inline int qcom_scm_dcvs_init_ca_v2(phys_addr_t addr, size_t size) { return -ENODEV; }
++static inline bool qcom_scm_dcvs_core_available(void) { return false; }
++static inline bool qcom_scm_dcvs_ca_available(void) { return false; }
++#endif
+diff --git a/compat/linux/mailbox/qmp.h b/compat/linux/mailbox/qmp.h
+new file mode 100644
+index 0000000..592bccc
+--- /dev/null
++++ b/compat/linux/mailbox/qmp.h
+@@ -0,0 +1,7 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef _KGSL_COMPAT_QMP_H
++#define _KGSL_COMPAT_QMP_H
++#include <linux/types.h>
++/* Downstream AOSS QMP mailbox packet; mainline uses qcom_aoss qmp_send(). */
++struct qmp_pkt { u32 size; void *data; };
++#endif
+diff --git a/compat/linux/mem-buf.h b/compat/linux/mem-buf.h
+new file mode 100644
+index 0000000..b9581a3
+--- /dev/null
++++ b/compat/linux/mem-buf.h
+@@ -0,0 +1,8 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef _KGSL_COMPAT_MEM_BUF_H
++#define _KGSL_COMPAT_MEM_BUF_H
++#include <linux/dma-buf.h>
++#include <linux/err.h>
++static inline int mem_buf_dma_buf_copy_vmperm(struct dma_buf *b, int **vmids, int **perms, int *nr) { return -EOPNOTSUPP; }
++static inline bool mem_buf_dma_buf_exclusive_owner(struct dma_buf *b) { return false; }
++#endif
+diff --git a/compat/linux/msm_sysstats.h b/compat/linux/msm_sysstats.h
+new file mode 100644
+index 0000000..d176f32
+--- /dev/null
++++ b/compat/linux/msm_sysstats.h
+@@ -0,0 +1,6 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef _KGSL_COMPAT_MSM_SYSSTATS_H
++#define _KGSL_COMPAT_MSM_SYSSTATS_H
++#define sysstats_register_kgsl_stats_cb(cb)	do { } while (0)
++#define sysstats_unregister_kgsl_stats_cb()	do { } while (0)
++#endif
+diff --git a/compat/linux/qcom-io-pgtable.h b/compat/linux/qcom-io-pgtable.h
+new file mode 100644
+index 0000000..c3e6c80
+--- /dev/null
++++ b/compat/linux/qcom-io-pgtable.h
+@@ -0,0 +1,18 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef _KGSL_COMPAT_QCOM_IO_PGTABLE_H
++#define _KGSL_COMPAT_QCOM_IO_PGTABLE_H
++#include <linux/io-pgtable.h>
++
++struct qcom_io_pgtable_info {
++	struct io_pgtable_cfg cfg;
++};
++
++#define QCOM_ARM_64_LPAE_S1 ARM_64_LPAE_S1
++
++static inline struct io_pgtable_ops *qcom_alloc_io_pgtable_ops(enum io_pgtable_fmt fmt,
++		struct qcom_io_pgtable_info *info, void *cookie)
++{
++	return alloc_io_pgtable_ops(fmt, &info->cfg, cookie);
++}
++#define qcom_free_io_pgtable_ops free_io_pgtable_ops
++#endif
+diff --git a/compat/linux/qcom-iommu-util.h b/compat/linux/qcom-iommu-util.h
+new file mode 100644
+index 0000000..b8d5b8a
+--- /dev/null
++++ b/compat/linux/qcom-iommu-util.h
+@@ -0,0 +1,26 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/* Mainline stand-ins for the Qualcomm downstream arm-smmu helpers. */
++#ifndef _KGSL_COMPAT_QCOM_IOMMU_UTIL_H
++#define _KGSL_COMPAT_QCOM_IOMMU_UTIL_H
++#include <linux/iommu.h>
++#include <linux/io-pgtable.h>
++#include <linux/qcom-io-pgtable.h>
++
++/* Fault reasons the downstream arm-smmu passes to fault handlers. */
++#define IOMMU_FAULT_TRANSLATION		BIT(2)
++#define IOMMU_FAULT_PERMISSION		BIT(3)
++#define IOMMU_FAULT_EXTERNAL		BIT(4)
++#define IOMMU_FAULT_TRANSACTION_STALLED	BIT(5)
++
++#define QCOM_IOMMU_FAULT_MODEL_NON_FATAL	BIT(0)
++#define QCOM_IOMMU_FAULT_MODEL_NO_CFRE		BIT(1)
++#define QCOM_IOMMU_FAULT_MODEL_NO_STALL		BIT(2)
++#define QCOM_IOMMU_FAULT_MODEL_HUPCF		BIT(3)
++
++/* mainline arm-smmu-qcom always gives the GPU context bank 0 */
++static inline int qcom_iommu_get_context_bank_nr(struct iommu_domain *d) { return 0; }
++static inline int qcom_iommu_get_asid_nr(struct iommu_domain *d) { return 0; }
++static inline int qcom_iommu_set_fault_model(struct iommu_domain *d, int m) { return 0; }
++static inline int qcom_iommu_set_secure_vmid(struct iommu_domain *d, int v) { return -EOPNOTSUPP; }
++static inline void qcom_skip_tlb_management(struct device *dev, bool skip) { }
++#endif
+diff --git a/compat/linux/qtee_shmbridge.h b/compat/linux/qtee_shmbridge.h
+new file mode 100644
+index 0000000..fd2d03d
+--- /dev/null
++++ b/compat/linux/qtee_shmbridge.h
+@@ -0,0 +1,10 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef _KGSL_COMPAT_QTEE_SHMBRIDGE_H
++#define _KGSL_COMPAT_QTEE_SHMBRIDGE_H
++#include <linux/errno.h>
++#include <linux/types.h>
++struct qtee_shm { phys_addr_t paddr; void *vaddr; size_t size; };
++static inline bool qtee_shmbridge_is_enabled(void) { return false; }
++static inline int qtee_shmbridge_allocate_shm(size_t s, struct qtee_shm *shm) { return -ENODEV; }
++static inline void qtee_shmbridge_free_shm(struct qtee_shm *shm) { }
++#endif
+diff --git a/compat/msm_hw_fence.h b/compat/msm_hw_fence.h
+new file mode 100644
+index 0000000..82114b1
+--- /dev/null
++++ b/compat/msm_hw_fence.h
+@@ -0,0 +1,23 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/* No hardware fence (IPCC) driver on mainline: registration always fails. */
++#ifndef _KGSL_COMPAT_MSM_HW_FENCE_H
++#define _KGSL_COMPAT_MSM_HW_FENCE_H
++#include <linux/dma-fence.h>
++#include <linux/err.h>
++#include <linux/types.h>
++#define HW_FENCE_CLIENT_ID_CTX0		0
++#define MSM_HW_FENCE_FLAG_ENABLED_BIT	31
++#define MSM_HW_FENCE_FLAG_SIGNALED_BIT	30
++struct msm_hw_fence_mem_addr { void *virtual_addr; phys_addr_t device_addr; u64 size; u32 mem_data; };
++struct msm_hw_fence_create_params { u64 *handle; struct dma_fence *fence; };
++struct msm_hw_fence_hfi_queue_table_header { u32 version, size, qhdr0_offset, qhdr_size, num_q, num_active_q; };
++struct msm_hw_fence_hfi_queue_header { u32 status, start_addr, type, queue_size, pkt_size, pkt_drop_cnt,
++	rx_wm, tx_wm, rx_req, tx_req, rx_irq_status, tx_irq_status, read_index, write_index; };
++static inline void *msm_hw_fence_register(int id, struct msm_hw_fence_mem_addr *m) { return ERR_PTR(-ENODEV); }
++static inline int msm_hw_fence_deregister(void *h) { return 0; }
++static inline int msm_hw_fence_create(void *h, struct msm_hw_fence_create_params *p) { return -ENODEV; }
++static inline int msm_hw_fence_destroy(void *h, struct dma_fence *f) { return 0; }
++static inline int msm_hw_fence_wait_update_v2(void *h, struct dma_fence **f, u64 *hh, u64 *d, u32 n, bool c) { return -ENODEV; }
++static inline int msm_hw_fence_update_txq(void *h, u64 idx, u64 flags, u32 err) { return -ENODEV; }
++static inline int msm_hw_fence_trigger_signal(void *h, u32 tx, u32 rx, u32 sig) { return -ENODEV; }
++#endif
+diff --git a/compat/soc/qcom/dcvs.h b/compat/soc/qcom/dcvs.h
+new file mode 100644
+index 0000000..3df0945
+--- /dev/null
++++ b/compat/soc/qcom/dcvs.h
+@@ -0,0 +1,14 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/* No L3/DDR DCVS voting service in mainline: report it as absent. */
++#ifndef _KGSL_COMPAT_DCVS_H
++#define _KGSL_COMPAT_DCVS_H
++#include <linux/errno.h>
++#include <linux/types.h>
++enum dcvs_hw_type { DCVS_DDR, DCVS_LLCC, DCVS_L3, DCVS_DDRQOS, DCVS_L3_1, NUM_DCVS_HW_TYPES };
++enum dcvs_path_type { DCVS_SLOW_PATH, DCVS_FAST_PATH, NUM_DCVS_PATHS };
++struct dcvs_freq { u32 ib; u32 ab; enum dcvs_hw_type hw_type; };
++static inline int qcom_dcvs_register_voter(const char *n, enum dcvs_hw_type h, enum dcvs_path_type p) { return -ENODEV; }
++static inline int qcom_dcvs_unregister_voter(const char *n, enum dcvs_hw_type h, enum dcvs_path_type p) { return -ENODEV; }
++static inline int qcom_dcvs_update_votes(const char *n, struct dcvs_freq *v, u32 m, enum dcvs_path_type p) { return -ENODEV; }
++static inline int qcom_dcvs_hw_minmax_get(enum dcvs_hw_type h, u32 *min, u32 *max) { return -ENODEV; }
++#endif
+diff --git a/compat/soc/qcom/msm_performance.h b/compat/soc/qcom/msm_performance.h
+new file mode 100644
+index 0000000..79844fb
+--- /dev/null
++++ b/compat/soc/qcom/msm_performance.h
+@@ -0,0 +1,8 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef _KGSL_COMPAT_MSM_PERFORMANCE_H
++#define _KGSL_COMPAT_MSM_PERFORMANCE_H
++enum { MSM_PERF_GFX };
++enum { MSM_PERF_QUEUE, MSM_PERF_SUBMIT, MSM_PERF_RETIRED };
++static inline void msm_perf_events_update(int cat, int ev, int pid, unsigned int ctx,
++		unsigned int ts, int prio) { }
++#endif
+diff --git a/compat/soc/qcom/of_common.h b/compat/soc/qcom/of_common.h
+new file mode 100644
+index 0000000..2ae47a5
+--- /dev/null
++++ b/compat/soc/qcom/of_common.h
+@@ -0,0 +1,7 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef _KGSL_COMPAT_OF_COMMON_H
++#define _KGSL_COMPAT_OF_COMMON_H
++#include <linux/errno.h>
++/* The DDR type comes from a bootloader-patched DT property downstream. */
++static inline int of_fdt_get_ddrtype(void) { return -ENOENT; }
++#endif
+diff --git a/compat/soc/qcom/secure_buffer.h b/compat/soc/qcom/secure_buffer.h
+new file mode 100644
+index 0000000..ca89a8e
+--- /dev/null
++++ b/compat/soc/qcom/secure_buffer.h
+@@ -0,0 +1,10 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/* Content protection (hyp_assign) is not supported on mainline. */
++#ifndef _KGSL_COMPAT_SECURE_BUFFER_H
++#define _KGSL_COMPAT_SECURE_BUFFER_H
++#define VMID_HLOS	3
++#define VMID_CP_PIXEL	19
++#define PERM_READ	0x4
++#define PERM_WRITE	0x2
++#define PERM_EXEC	0x1
++#endif
+diff --git a/compat/soc/qcom/socinfo.h b/compat/soc/qcom/socinfo.h
+new file mode 100644
+index 0000000..8c2ad78
+--- /dev/null
++++ b/compat/soc/qcom/socinfo.h
+@@ -0,0 +1,14 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/* Downstream socinfo accessors; mainline does not export them. */
++#ifndef _KGSL_COMPAT_SOCINFO_H
++#define _KGSL_COMPAT_SOCINFO_H
++#include <linux/errno.h>
++enum { SOCINFO_PART_GPU = 1 };
++enum { SOCINFO_FC_UNKNOWN = 0, SOCINFO_FC_Y0 = 0xf1, SOCINFO_FC_INT_RESERVE = 0xff };
++enum { SOCINFO_PCODE_UNKNOWN = 0 };
++static inline int socinfo_get_feature_code(void) { return SOCINFO_FC_UNKNOWN; }
++static inline int socinfo_get_pcode(void) { return SOCINFO_PCODE_UNKNOWN; }
++static inline int socinfo_get_partinfo_chip_id(int part) { return -EINVAL; }
++static inline char *socinfo_get_partinfo_part_name(int part) { return NULL; }
++static inline int socinfo_get_partinfo_vulkan_id(int part) { return -EINVAL; }
++#endif
+diff --git a/config/rp6.conf b/config/rp6.conf
+new file mode 100644
+index 0000000..2efe684
+--- /dev/null
++++ b/config/rp6.conf
+@@ -0,0 +1,11 @@
++# Retroid Pocket 6 (SM8550 / Adreno 740) on a mainline kernel.
++# Same as gki_kalama.conf minus coresight and the downstream TZ DCVS governor.
++CONFIG_QCOM_KGSL_IDLE_TIMEOUT = 80
++CONFIG_QCOM_KGSL_SORT_POOL = y
++CONFIG_QCOM_KGSL_IOCOHERENCY_DEFAULT = y
++CONFIG_QCOM_ADRENO_DEFAULT_GOVERNOR = \"simple_ondemand\"
++
++ccflags-y += -DCONFIG_QCOM_KGSL_IDLE_TIMEOUT=80 \
++		-DCONFIG_QCOM_KGSL_SORT_POOL=1 \
++		-DCONFIG_QCOM_KGSL_IOCOHERENCY_DEFAULT=1 \
++		-DCONFIG_QCOM_ADRENO_DEFAULT_GOVERNOR=\"simple_ondemand\"
+diff --git a/kgsl.c b/kgsl.c
+index 7848abe..aa9f7f4 100644
+--- a/kgsl.c
++++ b/kgsl.c
+@@ -3405,8 +3405,6 @@ static int kgsl_setup_dma_buf(struct kgsl_device *device,
+ 	 * which involves flushing the buffer on CPU.
+ 	 * HW manages coherency for IO coherent buffers.
+ 	 */
+-	if (entry->memdesc.flags & KGSL_MEMFLAGS_IOCOHERENT)
+-		attach->dma_map_attrs |= DMA_ATTR_SKIP_CPU_SYNC;
+ 
+ 	metadata->dmabuf = dmabuf;
+ 	metadata->attach = attach;
+@@ -4748,7 +4746,7 @@ static unsigned long set_svm_area(struct file *file,
+ 	 * Do additoinal constraints checking on the address. Passing MAP_FIXED
+ 	 * ensures that the address we want gets checked
+ 	 */
+-	ret = current->mm->get_unmapped_area(file, addr, len, 0,
++	ret = mm_get_unmapped_area(file, addr, len, 0,
+ 		flags & MAP_FIXED);
+ 
+ 	/* If it passes, attempt to set the region in the SVM */
+@@ -4836,7 +4834,8 @@ kgsl_get_unmapped_area(struct file *file, unsigned long addr,
+ 	struct kgsl_mem_entry *entry = NULL;
+ 
+ 	if (vma_offset == (unsigned long) KGSL_MEMSTORE_TOKEN_ADDRESS)
+-		return get_unmapped_area(NULL, addr, len, pgoff, flags);
++		/* __get_unmapped_area() is not exported any more */
++		return mm_get_unmapped_area(NULL, addr, len, pgoff, flags);
+ 
+ 	val = get_mmap_entry(private, &entry, pgoff, len);
+ 	if (val)
+@@ -4849,7 +4848,7 @@ kgsl_get_unmapped_area(struct file *file, unsigned long addr,
+ 	}
+ 
+ 	if (!kgsl_memdesc_use_cpu_map(&entry->memdesc)) {
+-		val = current->mm->get_unmapped_area(file, addr, len, 0, flags);
++		val = mm_get_unmapped_area(file, addr, len, 0, flags);
+ 		if (IS_ERR_VALUE(val))
+ 			dev_err_ratelimited(device->dev,
+ 					       "get_unmapped_area: pid %d addr %lx pgoff %lx len %ld failed error %d\n",
+diff --git a/kgsl_bus.c b/kgsl_bus.c
+index 392c592..2141f60 100644
+--- a/kgsl_bus.c
++++ b/kgsl_bus.c
+@@ -100,7 +100,7 @@ int kgsl_bus_update(struct kgsl_device *device,
+ void kgsl_icc_set_tag(struct kgsl_pwrctrl *pwr, int buslevel)
+ {
+ 	if (buslevel == pwr->pwrlevels[0].bus_max)
+-		icc_set_tag(pwr->icc_path, QCOM_ICC_TAG_ALWAYS | QCOM_ICC_TAG_PERF_MODE);
++		icc_set_tag(pwr->icc_path, QCOM_ICC_TAG_ALWAYS);
+ 	else
+ 		icc_set_tag(pwr->icc_path, QCOM_ICC_TAG_ALWAYS);
+ }
+diff --git a/kgsl_gmu_core.c b/kgsl_gmu_core.c
+index fb73080..3260f51 100644
+--- a/kgsl_gmu_core.c
++++ b/kgsl_gmu_core.c
+@@ -240,8 +240,9 @@ int gmu_core_iommu_init(struct kgsl_device *device)
+ 	struct device *gmu_pdev_dev = GMU_PDEV_DEV(device);
+ 	int ret;
+ 
+-	device->gmu_core.domain = iommu_domain_alloc(&platform_bus_type);
+-	if (!device->gmu_core.domain) {
++	device->gmu_core.domain = iommu_paging_domain_alloc(gmu_pdev_dev);
++	if (IS_ERR(device->gmu_core.domain)) {
++		device->gmu_core.domain = NULL;
+ 		dev_err(gmu_pdev_dev, "Unable to allocate GMU IOMMU domain\n");
+ 		return -ENODEV;
+ 	}
+diff --git a/kgsl_iommu.c b/kgsl_iommu.c
+index 99eb4d5..2c90aaa 100644
+--- a/kgsl_iommu.c
++++ b/kgsl_iommu.c
+@@ -257,13 +257,8 @@ static int _iopgtbl_unmap_pages(struct kgsl_iommu_pt *pt, u64 gpuaddr,
+ 				gpuaddr, gpuaddr, remaining, &pgcount);
+ 		if (size_to_unmap == 0)
+ 			break;
+-#if (KERNEL_VERSION(6, 1, 0) <= LINUX_VERSION_CODE)
+-		ret = qcom_arm_lpae_unmap_pages(ops, gpuaddr, size_to_unmap,
+-				pgcount, NULL);
+-#else
+ 		ret = ops->unmap_pages(ops, gpuaddr, size_to_unmap,
+ 				pgcount, NULL);
+-#endif
+ 		if (ret == 0)
+ 			break;
+ 
+@@ -322,22 +317,6 @@ static size_t _iopgtbl_map_sg(struct kgsl_iommu_pt *pt, u64 gpuaddr,
+ 	u64 addr = gpuaddr;
+ 	int ret, i;
+ 
+-#if (KERNEL_VERSION(6, 1, 0) <= LINUX_VERSION_CODE)
+-	if (IS_ENABLED(CONFIG_IOMMU_IO_PGTABLE_LPAE)) {
+-		ret = qcom_arm_lpae_map_sg(ops, addr, sgt->sgl, sgt->nents, prot,
+-			GFP_KERNEL, &mapped);
+-#else
+-	if (ops->map_sg) {
+-		ret = ops->map_sg(ops, addr, sgt->sgl, sgt->nents, prot,
+-			GFP_KERNEL, &mapped);
+-#endif
+-		if (ret) {
+-			_iopgtbl_unmap(pt, gpuaddr, mapped);
+-			return 0;
+-		}
+-		return mapped;
+-	}
+-
+ 	for_each_sg(sgt->sgl, sg, sgt->nents, i) {
+ 		size_t size = sg->length, map_size = 0;
+ 		phys_addr_t phys = sg_phys(sg);
+@@ -1495,7 +1474,6 @@ static int kgsl_iopgtbl_alloc(struct kgsl_iommu_context *ctx, struct kgsl_iommu_
+ 	if (!cfg)
+ 		return -ENODEV;
+ 
+-	pt->info = adreno_smmu->pgtbl_info;
+ 	pt->info.cfg = *cfg;
+ 	pt->info.cfg.quirks &= ~IO_PGTABLE_QUIRK_ARM_TTBR1;
+ 	pt->info.cfg.tlb = &kgsl_iopgtbl_tlb_ops;
+@@ -2547,8 +2525,9 @@ static int kgsl_iommu_setup_context(struct kgsl_mmu *mmu,
+ 	dev_set_drvdata(&pdev->dev, &context->adreno_smmu);
+ 
+ 	/* Create a new context */
+-	context->domain = iommu_domain_alloc(&platform_bus_type);
+-	if (!context->domain) {
++	context->domain = iommu_paging_domain_alloc(&pdev->dev);
++	if (IS_ERR(context->domain)) {
++		context->domain = NULL;
+ 		/*FIXME: Put back the pdev here? */
+ 		return -ENODEV;
+ 	}
+@@ -2691,8 +2670,9 @@ static int iommu_probe_secure_context(struct kgsl_device *device,
+ 	context->pdev = pdev;
+ 	ratelimit_default_init(&context->ratelimit);
+ 
+-	context->domain = iommu_domain_alloc(&platform_bus_type);
+-	if (!context->domain) {
++	context->domain = iommu_paging_domain_alloc(&pdev->dev);
++	if (IS_ERR(context->domain)) {
++		context->domain = NULL;
+ 		/* FIXME: put away the device */
+ 		return -ENODEV;
+ 	}
+diff --git a/kgsl_mmu.c b/kgsl_mmu.c
+index 6a0da6d..42e986e 100644
+--- a/kgsl_mmu.c
++++ b/kgsl_mmu.c
+@@ -699,18 +699,17 @@ static int kgsl_mmu_dev_probe(struct platform_device *pdev)
+ 	return component_add(&pdev->dev, &kgsl_mmu_component_ops);
+ }
+ 
+-static int kgsl_mmu_dev_remove(struct platform_device *pdev)
++static void kgsl_mmu_dev_remove(struct platform_device *pdev)
+ {
+ 	if (of_device_is_compatible(pdev->dev.of_node,
+ 				"qcom,smmu-kgsl-cb")) {
+ 		component_del(&pdev->dev, &kgsl_mmu_cb_component_ops);
+-		return 0;
++		return;
+ 	}
+ 
+ 	component_del(&pdev->dev, &kgsl_mmu_component_ops);
+ 
+ 	of_platform_depopulate(&pdev->dev);
+-	return 0;
+ }
+ 
+ static const struct of_device_id mmu_match_table[] = {
+diff --git a/kgsl_pwrctrl.c b/kgsl_pwrctrl.c
+index f46f086..84effd0 100644
+--- a/kgsl_pwrctrl.c
++++ b/kgsl_pwrctrl.c
+@@ -1868,7 +1868,7 @@ static int register_thermal_cooling_device(struct kgsl_device *device, struct de
+ 	if (ret)
+ 		goto err;
+ 
+-	pwr->cooling_dev = thermal_of_cooling_device_register(np, name, device,
++	pwr->cooling_dev = thermal_of_cooling_device_register(np, 0, name, device,
+ 			&kgsl_cooling_ops);
+ 	if (IS_ERR(pwr->cooling_dev)) {
+ 		dev_pm_qos_remove_request(&pwr->pmqos_max_freq);
+diff --git a/kgsl_snapshot.c b/kgsl_snapshot.c
+index 036f4fb..b3cf496 100644
+--- a/kgsl_snapshot.c
++++ b/kgsl_snapshot.c
+@@ -800,7 +800,7 @@ static int snapshot_release(struct kgsl_device *device,
+ 
+ /* Dump the sysfs binary data to the user */
+ static ssize_t snapshot_show(struct file *filep, struct kobject *kobj,
+-	struct bin_attribute *attr, char *buf, loff_t off,
++	const struct bin_attribute *attr, char *buf, loff_t off,
+ 	size_t count)
+ {
+ 	struct kgsl_device *device = kobj_to_device(kobj);
+@@ -1003,7 +1003,7 @@ static ssize_t snapshot_legacy_store(struct kgsl_device *device,
+ 	return ret ? ret : count;
+ }
+ 
+-static struct bin_attribute snapshot_attr = {
++static const struct bin_attribute snapshot_attr = {
+ 	.attr.name = "dump",
+ 	.attr.mode = 0444,
+ 	.size = 0,
+diff --git a/kgsl_sync.c b/kgsl_sync.c
+index e24cad9..ba939f2 100644
+--- a/kgsl_sync.c
++++ b/kgsl_sync.c
+@@ -532,7 +532,7 @@ out:
+ 	return ret;
+ }
+ 
+-static void kgsl_sync_timeline_value_str(struct dma_fence *fence,
++static void __maybe_unused kgsl_sync_timeline_value_str(struct dma_fence *fence,
+ 					char *str, int size)
+ {
+ 	struct kgsl_sync_fence *kfence = (struct kgsl_sync_fence *)fence;
+@@ -692,9 +692,6 @@ static const struct dma_fence_ops kgsl_sync_fence_ops = {
+ 	.signaled = kgsl_sync_fence_has_signaled,
+ 	.wait = dma_fence_default_wait,
+ 	.release = kgsl_sync_fence_release,
+-
+-	.fence_value_str = kgsl_sync_fence_value_str,
+-	.timeline_value_str = kgsl_sync_timeline_value_str,
+ };
+ 
+ static void kgsl_sync_fence_callback(struct dma_fence *fence,
+@@ -750,9 +747,9 @@ void kgsl_get_fence_name(struct dma_fence *f, char *name, u32 max_size)
+ 	int len = scnprintf(name, max_size, "%s %s", f->ops->get_driver_name(f),
+ 			f->ops->get_timeline_name(f));
+ 
+-	if (f->ops->fence_value_str) {
++	if (f->ops == &kgsl_sync_fence_ops) {
+ 		len += scnprintf(name + len, max_size - len, ": ");
+-		f->ops->fence_value_str(f, name + len, max_size - len);
++		kgsl_sync_fence_value_str(f, name + len, max_size - len);
+ 	}
+ 
+ }
+@@ -1184,7 +1181,7 @@ static const char *kgsl_syncsource_driver_name(struct dma_fence *fence)
+ 	return "kgsl-syncsource-timeline";
+ }
+ 
+-static void kgsl_syncsource_fence_value_str(struct dma_fence *fence,
++static void __maybe_unused kgsl_syncsource_fence_value_str(struct dma_fence *fence,
+ 						char *str, int size)
+ {
+ 	/*
+@@ -1200,7 +1197,5 @@ static const struct dma_fence_ops kgsl_syncsource_fence_ops = {
+ 	.enable_signaling = kgsl_syncsource_enable_signaling,
+ 	.wait = dma_fence_default_wait,
+ 	.release = kgsl_syncsource_fence_release,
+-
+-	.fence_value_str = kgsl_syncsource_fence_value_str,
+ };
+ 
+diff --git a/kgsl_timeline.c b/kgsl_timeline.c
+index ac710af..58d7fe8 100644
+--- a/kgsl_timeline.c
++++ b/kgsl_timeline.c
+@@ -78,8 +78,14 @@ struct dma_fence *kgsl_timelines_to_fence_array(struct kgsl_device *device,
+ 		return fence;
+ 	}
+ 
++	/* FIXME: mainline dropped signal-on-any fence arrays */
++	if (any) {
++		ret = -EOPNOTSUPP;
++		goto err;
++	}
++
+ 	array = dma_fence_array_create(count, fences,
+-		dma_fence_context_alloc(1), 0, any);
++		dma_fence_context_alloc(1), 0);
+ 
+ 	if (array)
+ 		return &array->base;
+@@ -195,8 +201,7 @@ static bool timeline_fence_signaled(struct dma_fence *fence)
+ {
+ 	struct kgsl_timeline_fence *f = to_timeline_fence(fence);
+ 
+-	return !__dma_fence_is_later(fence->seqno, f->timeline->value,
+-		fence->ops);
++	return !__dma_fence_is_later(fence, fence->seqno, f->timeline->value);
+ }
+ 
+ static bool timeline_fence_enable_signaling(struct dma_fence *fence)
+@@ -221,7 +226,7 @@ static const char *timeline_get_timeline_name(struct dma_fence *fence)
+ 	return f->timeline->name;
+ }
+ 
+-static void timeline_get_value_str(struct dma_fence *fence,
++static void __maybe_unused timeline_get_value_str(struct dma_fence *fence,
+ 		char *str, int size)
+ {
+ 	struct kgsl_timeline_fence *f = to_timeline_fence(fence);
+@@ -235,8 +240,6 @@ static const struct dma_fence_ops timeline_fence_ops = {
+ 	.signaled = timeline_fence_signaled,
+ 	.release = timeline_fence_release,
+ 	.enable_signaling = timeline_fence_enable_signaling,
+-	.timeline_value_str = timeline_get_value_str,
+-	.use_64bit_seqno = true,
+ };
+ 
+ static void kgsl_timeline_add_fence(struct kgsl_timeline *timeline,
+@@ -336,7 +339,7 @@ struct dma_fence *kgsl_timeline_fence_alloc(struct kgsl_timeline *timeline,
+ 		return ERR_PTR(-ENOENT);
+ 	}
+ 
+-	dma_fence_init(&fence->base, &timeline_fence_ops,
++	dma_fence_init64(&fence->base, &timeline_fence_ops,
+ 		&timeline->lock, timeline->context, seqno);
+ 
+ 	INIT_LIST_HEAD(&fence->node);
+-- 
+2.43.0
+

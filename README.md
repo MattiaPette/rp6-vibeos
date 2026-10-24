@@ -23,7 +23,8 @@ On an x86_64 or arm64 Linux host with `gcc-aarch64-linux-gnu`, `bc`, `flex`, `bi
 ```sh
 scripts/01-fetch-sources.sh            # kernel, topology, UCM, linux-firmware (only the files needed)
 scripts/10-build-kernel.sh             # RP6 config + drivers derived from the device tree
-scripts/15-build-kgsl-shim.sh          # /sys/class/kgsl + /dev/kgsl-3d0 for DroidDeck (gpu/README.md)
+scripts/15-build-kgsl.sh               # optional, experimental: KGSL GPU driver + its DTB
+scripts/16-build-kgsl-shim.sh          # or instead: msm + a KGSL-style sysfs and node for DroidDeck (gpu/README.md)
 scripts/20-build-audio.sh              # AudioReach topology + UCM
 scripts/30-collect-firmware.sh <dump>  # generic firmware + signed blobs from stock Android
 sudo scripts/40-build-rootfs.sh        # Debian minbase + Waydroid + cage
@@ -33,6 +34,15 @@ sudo scripts/50-make-sdimage.sh        # microSD image for OpenABL (no root need
 Shared settings live in `config.env`, the kernel config fragment in `kernel/rp6.config`.
 `scripts/dt2config.py` reads the RP6 DTB and enables the driver for every active node, so the
 config does not have to be written by hand.
+
+## Experimental: Qualcomm KGSL GPU driver
+
+DroidDeck's Turnip expects the Android GPU driver, KGSL (`/dev/kgsl-3d0`). As a fallback to
+faking that node on top of msm, `scripts/15-build-kgsl.sh` builds Qualcomm's KGSL
+(`msm_kgsl.ko`, pinned in `config.env`) against the 7.3 kernel with the patch in
+`kgsl/patches/`, and an RP6 device tree (`kgsl/dts/`) that gives the GPU to KGSL while msm
+keeps driving the display. It runs after `10-build-kernel.sh` and writes to `out/kgsl/`. It
+builds, but has not been tried on the device yet.
 
 ## Signed firmware
 

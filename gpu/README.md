@@ -38,7 +38,9 @@ nothing in Waydroid needs to change.
 2. **`/sys/class/kgsl/kgsl-3d0` is a small kernel module.** `kgsl-shim/kgsl_shim.c` registers a
    `kgsl` class with one device and no device node. Its files are read-only and filled from the
    msm GPU's devfreq (clock, levels, busy time) and the `gpuss-0` thermal zone. It never talks to
-   the GPU. Built by `scripts/15-build-kgsl-shim.sh`, loaded through `modules-load.d`.
+   the GPU. Built by `scripts/16-build-kgsl-shim.sh`, loaded through `modules-load.d`. It is the
+   alternative to the real KGSL from `scripts/15-build-kgsl.sh`: both register the `kgsl` class,
+   so only one of them can be installed.
 3. **A Turnip built for msm, which the runtime preloads cannot reach.** The runtime's own Turnip
    speaks KGSL only, so DroidDeck gets an msm one through its "Linux runtime driver" import
    (on its Components page; a zip with `libvulkan_freedreno.so` and `meta.json`).
