@@ -7,13 +7,16 @@
 # Behind a TLS-intercepting proxy, set BUILD_CA=<proxy CA bundle>: it is
 # trusted inside the chroot during the build only, and removed afterwards.
 #
-# Output: $OUT/rootfs/ and $OUT/rootfs.tar.zst
+# VARIANT=native builds the Steam ARM64 image instead: cage + Xwayland, no
+# Waydroid, weston or kgsl-shim, and Steam's client baked into /home/deck.
+#
+# Output: $OUT/rootfs$VARIANT_SUFFIX/ and $OUT/rootfs$VARIANT_SUFFIX.tar.zst
 set -euo pipefail
 # shellcheck source=config.env
 . "$(dirname "$0")/../config.env"
 
 [ "$(id -u)" = 0 ] || { echo "run as root" >&2; exit 1; }
-R=$OUT/rootfs
+R=$OUT/rootfs$VARIANT_SUFFIX
 rm -rf "$R" && mkdir -p "$R"
 
 debootstrap --arch=arm64 --variant=minbase \
@@ -41,14 +44,21 @@ cat > "$R/etc/dpkg/dpkg.cfg.d/90nodoc" <<-EOF
 	path-include=/usr/share/doc/*/copyright
 EOF
 
-# Waydroid's own repository (the Debian package lags behind).
-curl -fsSL https://repo.waydro.id/waydroid.gpg -o "$R/usr/share/keyrings/waydroid.gpg"
-echo "deb [signed-by=/usr/share/keyrings/waydroid.gpg] https://repo.waydro.id/ $DEBIAN_SUITE main" \
-	> "$R/etc/apt/sources.list.d/waydroid.list"
+if [ "$VARIANT" = waydroid ]; then
+	# Waydroid's own repository (the Debian package lags behind).
+	curl -fsSL https://repo.waydro.id/waydroid.gpg -o "$R/usr/share/keyrings/waydroid.gpg"
+	echo "deb [signed-by=/usr/share/keyrings/waydroid.gpg] https://repo.waydro.id/ $DEBIAN_SUITE main" \
+		> "$R/etc/apt/sources.list.d/waydroid.list"
+	variant_pkgs="waydroid weston"
+else
+	# gamescope is not packaged for arm64: cage + Xwayland, plus the libraries
+	# Valve's ARM64 client links against.
+	variant_pkgs="cage xwayland wlr-randr unzip libgtk2.0-0t64 libnss3 libvdpau1 libxss1 libpci3 libvpx9"
+fi
 
 chroot_run apt-get update
 chroot_run apt-get install -y \
-	waydroid weston bluez \
+	$variant_pkgs bluez \
 	libgl1-mesa-dri mesa-vulkan-drivers \
 	pipewire pipewire-pulse wireplumber alsa-ucm-conf \
 	seatd zram-tools \
@@ -58,7 +68,7 @@ chroot_run apt-get clean
 # The slim kernel only has the nftables backend. waydroid-net.sh prefers
 # iptables-legacy when present, which fails without ip_tables.ko, so drop the
 # legacy binaries and let it fall back to iptables (= iptables-nft).
-rm -f "$R"/usr/sbin/{iptables,ip6tables}-legacy{,-save,-restore}
+[ "$VARIANT" = native ] || rm -f "$R"/usr/sbin/{iptables,ip6tables}-legacy{,-save,-restore}
 if [ -n "${BUILD_CA:-}" ]; then
 	rm "$R/usr/local/share/ca-certificates/rp6-build-ca.crt"
 	chroot_run update-ca-certificates --fresh >/dev/null
@@ -76,13 +86,15 @@ grep -q '^resolv_conf=/run/resolvconf/resolv.conf$' "$R/etc/resolvconf.conf" \
 # Retroid audio files, firmware and kernel modules from the earlier steps.
 # tar, not cp: /lib is a symlink to usr/lib in Debian and must stay one.
 # kgsl-shim/root is the /dev/kgsl-3d0 overlay from 16-build-kgsl-shim.sh.
-for part in audio firmware kernel/modules kgsl-shim/root; do
+parts="audio firmware kernel/modules"
+[ "$VARIANT" = native ] || parts="$parts kgsl-shim/root"
+for part in $parts; do
 	[ -d "$OUT/$part" ] || continue
 	tar -C "$OUT/$part" -cf - . | tar -C "$R" -xf - --keep-directory-symlink
 done
 # The real KGSL from 15-build-kgsl.sh only binds with its own device tree,
 # which the SD image offers as a separate boot entry.
-if [ -f "$OUT/kgsl/msm_kgsl.ko" ]; then
+if [ "$VARIANT" = waydroid ] && [ -f "$OUT/kgsl/msm_kgsl.ko" ]; then
 	kver=$(cat "$OUT/kernel/build/include/config/kernel.release")
 	install -Dm644 "$OUT/kgsl/msm_kgsl.ko" "$R/lib/modules/$kver/extra/msm_kgsl.ko"
 	depmod -b "$R" "$kver"
@@ -322,8 +334,17 @@ install -Dm644 /dev/stdin "$R/etc/systemd/system/kiosk.service" <<-'EOF'
 	[Install]
 	WantedBy=graphical.target
 EOF
-chroot_run systemctl enable kiosk.service waydroid-container.service zramswap.service iwd.service \
-	rp6-wifi-from-boot.service waydroid-firstboot.service rp6-grow-root.service \
+if [ "$VARIANT" = native ]; then
+	# Steam instead of Waydroid: drop its units, add the Steam session.
+	rm -f "$R"/etc/systemd/system/{kiosk,waydroid-firstboot}.service \
+		"$R"/etc/rp6/weston.ini "$R"/usr/local/bin/rp6-waydroid-ui
+	. "$(dirname "$0")/../native/steam-image.sh"
+	session=steam-session.service
+else
+	session="kiosk.service waydroid-container.service waydroid-firstboot.service"
+fi
+chroot_run systemctl enable $session zramswap.service iwd.service \
+	rp6-wifi-from-boot.service rp6-grow-root.service \
 	rp6-ssh-keys-from-boot.service dropbear.socket systemd-timesyncd.service
 chroot_run systemctl set-default graphical.target
 chroot_run systemctl disable getty@tty1.service || true
@@ -347,7 +368,7 @@ install -Dm644 /dev/stdin "$R/etc/systemd/system/rp6-brightness.service" <<-'EOF
 	[Unit]
 	Description=Set a sane first-boot brightness
 	ConditionPathExists=!/var/lib/rp6-brightness-set
-	Before=kiosk.service
+	Before=kiosk.service steam-session.service
 
 	[Service]
 	Type=oneshot
@@ -385,7 +406,8 @@ chroot_run systemctl mask apt-daily.timer apt-daily-upgrade.timer man-db.timer \
 	e2scrub_all.timer fstrim.timer 2>/dev/null || true
 # Pulled in by Waydroid's lxc dependency: Waydroid sets up its own bridge and
 # starts its container itself. weston gets the seat from logind, not seatd.
-chroot_run systemctl disable lxc.service lxc-net.service lxc-monitord.service seatd.service
+[ "$VARIANT" = native ] || chroot_run systemctl disable lxc.service lxc-net.service lxc-monitord.service
+chroot_run systemctl disable seatd.service
 
-tar -C "$R" -I 'zstd -19 -T0' -cf "$OUT/rootfs.tar.zst" .
-du -sh "$R" "$OUT/rootfs.tar.zst"
+tar -C "$R" -I 'zstd -19 -T0' -cf "$OUT/rootfs$VARIANT_SUFFIX.tar.zst" .
+du -sh "$R" "$OUT/rootfs$VARIANT_SUFFIX.tar.zst"

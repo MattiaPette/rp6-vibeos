@@ -3,7 +3,7 @@
 #   p1  FAT32 ESP  extlinux/extlinux.conf, Image, dtbs/<DTB>
 #   p2  ext4       $OUT/rootfs, found by the kernel as PARTLABEL=$ROOT_LABEL
 #
-# Without $OUT/rootfs the image holds a test root whose only program is
+# Without $OUT/rootfs (rootfs-native for VARIANT=native) the image holds a test root whose only program is
 # tools/diag-init.c: it copies the kernel log to rp6-log/ on the ESP, so a
 # black screen can still be diagnosed from a computer. Firmware from
 # 30-collect-firmware.sh goes in too when it is there.
@@ -18,20 +18,21 @@ set -euo pipefail
 . "$(dirname "$0")/../config.env"
 
 K=$OUT/kernel
-IMG=$OUT/rp6-sd.img
+IMG=$OUT/rp6-sd$VARIANT_SUFFIX.img
 W=$OUT/sdimage
 rm -rf "$W" && mkdir -p "$W"
 
 ESP_MB=256
-if [ -d "$OUT/rootfs" ]; then
-	[ "$(id -u)" = 0 ] || { echo "packing $OUT/rootfs needs root: sudo $0" >&2; exit 1; }
-	root_src=$OUT/rootfs
+ROOTFS=$OUT/rootfs$VARIANT_SUFFIX
+if [ -d "$ROOTFS" ]; then
+	[ "$(id -u)" = 0 ] || { echo "packing $ROOTFS needs root: sudo $0" >&2; exit 1; }
+	root_src=$ROOTFS
 else
 	root_src=$W/test-root
 	mkdir -p "$root_src"/{sbin,dev,proc,sys,boot}
 	"${CROSS_COMPILE}gcc" -static -Os -o "$root_src/sbin/init" "$TOP/tools/diag-init.c"
 	[ -d "$OUT/firmware/lib" ] && cp -r "$OUT/firmware/lib" "$root_src/"
-	echo "no $OUT/rootfs: building a kernel-only test image"
+	echo "no $ROOTFS: building a kernel-only test image"
 fi
 # Rootfs size plus 25% and 256 MB of headroom.
 ROOT_MB=$(( $(du -sm "$root_src" | cut -f1) * 5 / 4 + 256 ))
