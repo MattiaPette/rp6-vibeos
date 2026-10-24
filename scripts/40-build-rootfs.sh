@@ -146,11 +146,13 @@ EOF
 install -Dm755 /dev/stdin "$R/usr/local/sbin/rp6-grow-root" <<-'EOF'
 	#!/bin/sh
 	# Grow the partition holding / to the end of its disk, then ext4 online.
-	set -eu
-	dev=$(findmnt -no SOURCE /)
-	name=${dev#/dev/}
-	disk=/dev/$(lsblk -no PKNAME "$dev")
-	part=$(cat "/sys/class/block/$name/partition")
+	set -eux
+	# Without an initramfs / shows up as /dev/root, so find the partition by
+	# its device number: /sys/dev/block/<maj:min> -> .../<disk>/<partition>.
+	sys=$(readlink -f "/sys/dev/block/$(findmnt -no MAJ:MIN /)")
+	dev=/dev/$(basename "$sys")
+	disk=/dev/$(basename "$(dirname "$sys")")
+	part=$(cat "$sys/partition")
 	# --force: the disk is in use (it holds /). The write also moves the
 	# backup GPT header to the new end of the card.
 	echo ', +' | sfdisk -q --no-reread --force -N "$part" "$disk"
@@ -162,11 +164,15 @@ install -Dm644 /dev/stdin "$R/etc/systemd/system/rp6-grow-root.service" <<-'EOF'
 	[Unit]
 	Description=Grow the root partition to the whole card
 	Before=waydroid-firstboot.service
+	RequiresMountsFor=/boot
 	ConditionPathExists=!/var/lib/rp6-root-grown
 
 	[Service]
 	Type=oneshot
 	ExecStart=/usr/local/sbin/rp6-grow-root
+	# Readable from any computer: there may be no keyboard on the device.
+	StandardOutput=append:/boot/rp6-grow-root.log
+	StandardError=append:/boot/rp6-grow-root.log
 
 	[Install]
 	WantedBy=multi-user.target
