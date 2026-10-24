@@ -19,6 +19,9 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/of_platform.h>
+#include <linux/platform_device.h>
+#include <linux/pm_opp.h>
 #include <linux/sysfs.h>
 #include <linux/thermal.h>
 
@@ -32,26 +35,78 @@ MODULE_PARM_DESC(thermal_zone, "Thermal zone read for temp");
 
 static struct device *kgsl_dev;
 
+/* msm, pinned once found; see pin_driver(). */
+static struct module *gpu_owner;
+static DEFINE_MUTEX(pin_lock);
+
 /* The msm GPU is the node compatible with "qcom,adreno" (not the GMU). */
 static struct device_node *gpu_node(void)
 {
 	return of_find_compatible_node(NULL, NULL, "qcom,adreno");
 }
 
-/*
- * Looked up on every read: the msm driver may bind after this module
- * loads, or unbind and bind again.
- */
-static struct devfreq *gpu_devfreq(void)
+/* The GPU's platform device, with a reference the caller drops. */
+static struct device *gpu_device(void)
 {
 	struct device_node *np = gpu_node();
-	struct devfreq *df;
+	struct platform_device *pdev;
 
 	if (!np)
 		return NULL;
-	df = devfreq_get_devfreq_by_node(np);
+	pdev = of_find_device_by_node(np);
 	of_node_put(np);
-	return IS_ERR(df) ? NULL : df;
+	return pdev ? &pdev->dev : NULL;
+}
+
+/*
+ * When the last reference to a devfreq goes, the devfreq core calls back
+ * into its driver's profile, which lives in the msm module. Readers here
+ * may hold that last reference, so keep msm loaded for as long as this
+ * module is. Built-in msm has no owner and needs nothing.
+ */
+static bool pin_driver(struct device *gpu)
+{
+	bool ok;
+
+	mutex_lock(&pin_lock);
+	device_lock(gpu);
+	ok = gpu->driver && (gpu_owner || !gpu->driver->owner);
+	if (gpu->driver && !ok && try_module_get(gpu->driver->owner)) {
+		gpu_owner = gpu->driver->owner;
+		ok = true;
+	}
+	device_unlock(gpu);
+	mutex_unlock(&pin_lock);
+	return ok;
+}
+
+static int is_devfreq(struct device *dev, const void *data)
+{
+	return dev->class && !strcmp(dev->class->name, "devfreq");
+}
+
+/*
+ * The GPU's devfreq, looked up on every read (msm may bind after this
+ * module loads, or unbind and bind again) and held by a reference to its
+ * device, which keeps the struct alive even if msm removes it meanwhile.
+ * Release with put_devfreq().
+ */
+static struct devfreq *get_devfreq(void)
+{
+	struct device *gpu = gpu_device();
+	struct device *dev = NULL;
+
+	if (!gpu)
+		return NULL;
+	if (pin_driver(gpu))
+		dev = device_find_child(gpu, NULL, is_devfreq);
+	put_device(gpu);
+	return dev ? container_of(dev, struct devfreq, dev) : NULL;
+}
+
+static void put_devfreq(struct devfreq *df)
+{
+	put_device(&df->dev);
 }
 
 struct gpu_state {
@@ -64,7 +119,7 @@ struct gpu_state {
 
 static bool read_state(struct gpu_state *s)
 {
-	struct devfreq *df = gpu_devfreq();
+	struct devfreq *df = get_devfreq();
 
 	memset(s, 0, sizeof(*s));
 	if (!df)
@@ -76,6 +131,7 @@ static bool read_state(struct gpu_state *s)
 	s->busy = df->last_status.busy_time;
 	s->total = df->last_status.total_time;
 	mutex_unlock(&df->lock);
+	put_devfreq(df);
 	return true;
 }
 
@@ -86,21 +142,28 @@ static unsigned int busy_percent(const struct gpu_state *s)
 	return min_t(u64, 100, div64_u64((u64)s->busy * 100, s->total));
 }
 
+/*
+ * From the OPP table rather than devfreq's freq_table, which msm can free
+ * while a reader holds the devfreq; the OPP calls take their own references.
+ */
 static ssize_t freq_list(char *buf)
 {
-	struct devfreq *df = gpu_devfreq();
+	struct device *gpu = gpu_device();
+	unsigned long freqs[32], f = 0;
+	struct dev_pm_opp *opp;
 	ssize_t len = 0;
-	int i;
+	int n = 0;
 
-	if (!df)
-		return sysfs_emit(buf, "\n");
-	mutex_lock(&df->lock);
+	if (gpu) {
+		while (n < ARRAY_SIZE(freqs) && !IS_ERR(opp = dev_pm_opp_find_freq_ceil(gpu, &f))) {
+			dev_pm_opp_put(opp);
+			freqs[n++] = f++;
+		}
+		put_device(gpu);
+	}
 	/* KGSL lists the fastest level first. */
-	for (i = df->max_state - 1; i >= 0; i--)
-		len += sysfs_emit_at(buf, len, "%lu ", df->freq_table[i]);
-	mutex_unlock(&df->lock);
-	if (len)
-		len--;
+	while (n--)
+		len += sysfs_emit_at(buf, len, n ? "%lu " : "%lu", freqs[n]);
 	len += sysfs_emit_at(buf, len, "\n");
 	return len;
 }
@@ -300,6 +363,8 @@ static void __exit kgsl_shim_exit(void)
 {
 	device_unregister(kgsl_dev);
 	class_unregister(&kgsl_class);
+	if (gpu_owner)
+		module_put(gpu_owner);
 }
 
 module_init(kgsl_shim_init);
