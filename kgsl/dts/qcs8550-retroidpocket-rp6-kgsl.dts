@@ -26,6 +26,9 @@
 &soc {
 	kgsl_msm_gpu: qcom,kgsl-3d0@3d00000 {
 		compatible = "qcom,adreno-gpu-gen7-2-1", "qcom,kgsl-3d0";
+		/* downstream reads these from socinfo, which mainline does not export */
+		qcom,chipid = <0x43050a01>;
+		qcom,gpu-model = "Adreno740v2";
 		reg = <0x0 0x03d00000 0x0 0x40000>, <0x0 0x03d61000 0x0 0x800>,
 		      <0x0 0x03d50000 0x0 0x10000>, <0x0 0x03d8b000 0x0 0x2000>,
 		      <0x0 0x03d9e000 0x0 0x1000>;
@@ -245,6 +248,8 @@
 		/*
 		 * SID 0 makes mainline arm-smmu-qcom treat this as the GPU:
 		 * context bank 0, TTBR1 split and adreno_smmu_priv callbacks.
+		 * kernel/patches/0003 gives it an identity default domain so
+		 * that only KGSL's own domain gets a context bank.
 		 */
 		gfx3d_user: gfx3d_user {
 			compatible = "qcom,smmu-kgsl-cb";

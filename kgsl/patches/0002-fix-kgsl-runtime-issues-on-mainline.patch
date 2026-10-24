@@ -1,0 +1,183 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 24 Oct 2026 13:01:36 +0000
+Subject: [PATCH] Fix KGSL runtime issues on the RP6 mainline kernel
+
+Found in review of the first port; none of these show at build time.
+
+- Request the firmware where the rootfs installs it: qcom/a740_sqe.fw,
+  qcom/gmu_gen70200.bin, and the zap shader from the zap-shader node's
+  firmware-name (it is signed per device), like the mainline msm driver.
+- Map the KGSL IOMMU registers with of_address_to_resource(): mainline
+  device trees use two address and two size cells, so reading two raw
+  reg cells mapped address 0.
+- Treat "qcom,smmu-500" as SMMU-500, so the QSMMU-only register writes at
+  0x6800 and 0x64a0 are skipped.
+- Drop ADRENO_LPAC from gen7_2_1: mainline has no LPAC aperture SCM call
+  and the RP6 tree has no gfx3d_lpac context, so MMU setup failed and fell
+  back to no per-process pagetables.
+- socinfo stubs return 0 for the chip and Vulkan ids: callers treat any
+  nonzero value as valid, so -EINVAL leaked out as 0xffffffea.
+- kgsl_devfreq_target() only switched on an exact table match; generic
+  governors such as simple_ondemand ask for frequencies in between, so
+  round to a table entry following the devfreq flags.
+---
+ adreno-gpulist.h          |  6 +++---
+ compat/soc/qcom/socinfo.h |  7 ++++---
+ kgsl_iommu.c              | 11 +++++++----
+ kgsl_pwrscale.c           | 27 +++++++++++++++++++++------
+ kgsl_util.c               |  3 +++
+ 5 files changed, 38 insertions(+), 16 deletions(-)
+
+diff --git a/adreno-gpulist.h b/adreno-gpulist.h
+index 6cafd5b..81ae53b 100644
+--- a/adreno-gpulist.h
++++ b/adreno-gpulist.h
+@@ -2279,7 +2279,7 @@ static const struct adreno_gen7_core adreno_gpu_core_gen7_2_1 = {
+ 				UINT_MAX, UINT_MAX, UINT_MAX, ANY_ID),
+ 		.compatible = "qcom,adreno-gpu-gen7-2-1",
+ 		.features = ADRENO_APRIV | ADRENO_IOCOHERENT | ADRENO_IFPC |
+-				ADRENO_CONTENT_PROTECTION | ADRENO_LPAC |
++				ADRENO_CONTENT_PROTECTION |
+ 				ADRENO_BCL | ADRENO_L3_VOTE | ADRENO_ACD |
+ 				ADRENO_PREEMPTION | ADRENO_DMS | ADRENO_GMU_AB,
+ 		.gpudev = &adreno_gen7_hwsched_gpudev.base,
+@@ -2290,8 +2290,8 @@ static const struct adreno_gen7_core adreno_gpu_core_gen7_2_1 = {
+ 		.snapshot_size = SZ_8M,
+ 	},
+ 	.gmu_fw_version = GMU_VERSION(4, 1, 0),
+-	.sqefw_name = "a740_sqe.fw",
+-	.gmufw_name = "gmu_gen70200.bin",
++	.sqefw_name = "qcom/a740_sqe.fw",
++	.gmufw_name = "qcom/gmu_gen70200.bin",
+ 	.zap_name = "a740_zap.mbn",
+ 	.hwcg = gen7_2_0_hwcg_regs,
+ 	.hwcg_count = ARRAY_SIZE(gen7_2_0_hwcg_regs),
+diff --git a/compat/soc/qcom/socinfo.h b/compat/soc/qcom/socinfo.h
+index 8c2ad78..6b8c823 100644
+--- a/compat/soc/qcom/socinfo.h
++++ b/compat/soc/qcom/socinfo.h
+@@ -2,13 +2,14 @@
+ /* Downstream socinfo accessors; mainline does not export them. */
+ #ifndef _KGSL_COMPAT_SOCINFO_H
+ #define _KGSL_COMPAT_SOCINFO_H
+-#include <linux/errno.h>
++#include <linux/types.h>
+ enum { SOCINFO_PART_GPU = 1 };
+ enum { SOCINFO_FC_UNKNOWN = 0, SOCINFO_FC_Y0 = 0xf1, SOCINFO_FC_INT_RESERVE = 0xff };
+ enum { SOCINFO_PCODE_UNKNOWN = 0 };
+ static inline int socinfo_get_feature_code(void) { return SOCINFO_FC_UNKNOWN; }
+ static inline int socinfo_get_pcode(void) { return SOCINFO_PCODE_UNKNOWN; }
+-static inline int socinfo_get_partinfo_chip_id(int part) { return -EINVAL; }
++/* 0 means "not available" to the callers */
++static inline u32 socinfo_get_partinfo_chip_id(int part) { return 0; }
+ static inline char *socinfo_get_partinfo_part_name(int part) { return NULL; }
+-static inline int socinfo_get_partinfo_vulkan_id(int part) { return -EINVAL; }
++static inline u32 socinfo_get_partinfo_vulkan_id(int part) { return 0; }
+ #endif
+diff --git a/kgsl_iommu.c b/kgsl_iommu.c
+index 2c90aaa..26761e3 100644
+--- a/kgsl_iommu.c
++++ b/kgsl_iommu.c
+@@ -8,6 +8,7 @@
+ #include <linux/compat.h>
+ #include <linux/io.h>
+ #include <linux/iopoll.h>
++#include <linux/of_address.h>
+ #include <linux/of_device.h>
+ #include <linux/of_platform.h>
+ #include <linux/scatterlist.h>
+@@ -2747,7 +2748,8 @@ static void kgsl_iommu_check_config(struct kgsl_mmu *mmu,
+ 	phandle = of_parse_phandle(node, "iommus", 0);
+ 
+ 	if (phandle) {
+-		if (of_device_is_compatible(phandle, "qcom,qsmmu-v500"))
++		if (of_device_is_compatible(phandle, "qcom,qsmmu-v500") ||
++		    of_device_is_compatible(phandle, "qcom,smmu-500"))
+ 			mmu->subtype = KGSL_IOMMU_SMMU_V500;
+ 		if (of_device_is_compatible(phandle, "qcom,adreno-smmu"))
+ 			set_bit(KGSL_MMU_IOPGTABLE, &mmu->features);
+@@ -2760,7 +2762,7 @@ static void kgsl_iommu_check_config(struct kgsl_mmu *mmu,
+ 
+ int kgsl_iommu_bind(struct kgsl_device *device, struct platform_device *pdev)
+ {
+-	u32 val[2];
++	struct resource res;
+ 	int ret, i;
+ 	struct kgsl_iommu *iommu = KGSL_IOMMU(device);
+ 	struct kgsl_mmu *mmu = &device->mmu;
+@@ -2776,7 +2778,7 @@ int kgsl_iommu_bind(struct kgsl_device *device, struct platform_device *pdev)
+ 		}
+ 	}
+ 
+-	ret = of_property_read_u32_array(node, "reg", val, 2);
++	ret = of_address_to_resource(node, 0, &res);
+ 	if (ret) {
+ 		dev_err(&device->pdev->dev,
+ 			"%pOF: Unable to read KGSL IOMMU register range\n",
+@@ -2784,7 +2786,8 @@ int kgsl_iommu_bind(struct kgsl_device *device, struct platform_device *pdev)
+ 		goto err;
+ 	}
+ 
+-	iommu->regbase = devm_ioremap(&device->pdev->dev, val[0], val[1]);
++	iommu->regbase = devm_ioremap(&device->pdev->dev, res.start,
++			resource_size(&res));
+ 	if (!iommu->regbase) {
+ 		dev_err(&device->pdev->dev, "Couldn't map IOMMU registers\n");
+ 		ret = -ENOMEM;
+diff --git a/kgsl_pwrscale.c b/kgsl_pwrscale.c
+index f0def2b..4f9ee7e 100644
+--- a/kgsl_pwrscale.c
++++ b/kgsl_pwrscale.c
+@@ -250,13 +250,28 @@ static int kgsl_devfreq_target(struct device *dev, unsigned long *freq, u32 flag
+ 	cur_freq = kgsl_pwrctrl_active_freq(pwr);
+ 	level = pwr->active_pwrlevel;
+ 
+-	/* If the governor recommends a new frequency, update it here */
++	/*
++	 * If the governor recommends a new frequency, update it here. Generic
++	 * governors such as simple_ondemand ask for frequencies between table
++	 * entries, so round like devfreq_recommended_opp(): power levels run
++	 * from the fastest (0) to the slowest.
++	 */
+ 	if (rec_freq != cur_freq) {
+-		for (i = 0; i < pwr->num_pwrlevels; i++)
+-			if (rec_freq == pwr->pwrlevels[i].gpu_freq) {
+-				level = i;
+-				break;
+-			}
++		if (flags & DEVFREQ_FLAG_LEAST_UPPER_BOUND) {
++			level = 0;
++			for (i = pwr->num_pwrlevels; i-- > 0;)
++				if (pwr->pwrlevels[i].gpu_freq >= rec_freq) {
++					level = i;
++					break;
++				}
++		} else {
++			level = pwr->num_pwrlevels - 1;
++			for (i = 0; i < pwr->num_pwrlevels; i++)
++				if (pwr->pwrlevels[i].gpu_freq <= rec_freq) {
++					level = i;
++					break;
++				}
++		}
+ 		if (level != pwr->active_pwrlevel)
+ 			kgsl_pwrctrl_pwrlevel_change(device, level);
+ 	}
+diff --git a/kgsl_util.c b/kgsl_util.c
+index 5fedfba..1719d62 100644
+--- a/kgsl_util.c
++++ b/kgsl_util.c
+@@ -116,6 +116,9 @@ int kgsl_zap_shader_load(struct device *dev, const char *name)
+ 		return -ENODEV;
+ 	}
+ 
++	/* the zap shader is signed per device, so the DT names its path */
++	of_property_read_string(np, "firmware-name", &name);
++
+ 	mem_np = of_parse_phandle(np, "memory-region", 0);
+ 	of_node_put(np);
+ 	if (!mem_np) {
+-- 
+2.43.0
+

@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 24 Oct 2026 13:05:00 +0000
+Subject: [PATCH] iommu/arm-smmu-qcom: identity default domain for KGSL
+
+Qualcomm's out-of-tree KGSL driver (rp6-vibeos kgsl/) describes the GPU
+context bank as a "qcom,smmu-kgsl-cb" child and the GMU as
+"qcom,gen7-gmu". Like msm's "qcom,adreno" and "qcom,adreno-gmu", they
+attach their own paging domains, so they must start in an identity
+default domain. Otherwise the SID 0 context bank gets a translated DMA
+domain at probe, and qcom_adreno_smmu_init_context() dereferences its
+adreno_smmu_priv driver data before KGSL has set it.
+
+No effect unless a device tree uses these compatibles.
+---
+ drivers/iommu/arm/arm-smmu/arm-smmu-qcom.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/drivers/iommu/arm/arm-smmu/arm-smmu-qcom.c b/drivers/iommu/arm/arm-smmu/arm-smmu-qcom.c
+index 795e8ec7e..077950167 100644
+--- a/drivers/iommu/arm/arm-smmu/arm-smmu-qcom.c
++++ b/drivers/iommu/arm/arm-smmu/arm-smmu-qcom.c
+@@ -406,6 +406,9 @@ static int qcom_adreno_smmu_init_context(struct arm_smmu_domain *smmu_domain,
+ static const struct of_device_id qcom_smmu_client_of_match[] __maybe_unused = {
+ 	{ .compatible = "qcom,adreno" },
+ 	{ .compatible = "qcom,adreno-gmu" },
++	/* Qualcomm KGSL: GPU context bank and GMU set up their own domains */
++	{ .compatible = "qcom,gen7-gmu" },
++	{ .compatible = "qcom,smmu-kgsl-cb" },
+ 	{ .compatible = "qcom,glymur-mdss" },
+ 	{ .compatible = "qcom,mdp4" },
+ 	{ .compatible = "qcom,mdss" },
