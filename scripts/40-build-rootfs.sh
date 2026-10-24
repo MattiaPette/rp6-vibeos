@@ -55,6 +55,10 @@ chroot_run apt-get install -y \
 	kmscube vulkan-tools alsa-utils \
 	fdisk e2fsprogs openresolv dropbear-bin systemd-timesyncd
 chroot_run apt-get clean
+# The slim kernel only has the nftables backend. waydroid-net.sh prefers
+# iptables-legacy when present, which fails without ip_tables.ko, so drop the
+# legacy binaries and let it fall back to iptables (= iptables-nft).
+rm -f "$R"/usr/sbin/{iptables,ip6tables}-legacy{,-save,-restore}
 if [ -n "${BUILD_CA:-}" ]; then
 	rm "$R/usr/local/share/ca-certificates/rp6-build-ca.crt"
 	chroot_run update-ca-certificates --fresh >/dev/null
