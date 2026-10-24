@@ -63,3 +63,12 @@ Per controllare la versione: `fastboot getvar version-bootloader`.
    (oppure con balenaEtcher o Raspberry Pi Imager).
 3. Accendi tenendo Vol giù, imposta *Boot mode* su Linux e *Boot source* su SD card, poi *Start*.
    Con Vol su all'accensione si torna ad Android.
+4. Senza rootfs, l'immagine di solo kernel salva per 2 minuti i log in `rp6-log/` sulla
+   partizione FAT (`RP6BOOT`), leggibile da qualsiasi computer.
+
+## Wi-Fi e Waydroid al primo avvio
+
+Prima del primo avvio, crea `wifi.txt` nella partizione FAT `RP6BOOT` con due righe: nome della
+rete e password. All'avvio il sistema la trasforma in un profilo iwd e cancella il file.
+Al primo avvio con rete, `waydroid init` scarica le immagini Android (circa 1 GB); poi parte
+la schermata di Waydroid a tutto schermo.
