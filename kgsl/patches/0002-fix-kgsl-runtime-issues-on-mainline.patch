@@ -20,14 +20,15 @@ Found in review of the first port; none of these show at build time.
   nonzero value as valid, so -EINVAL leaked out as 0xffffffea.
 - kgsl_devfreq_target() only switched on an exact table match; generic
   governors such as simple_ondemand ask for frequencies in between, so
-  round to a table entry following the devfreq flags.
+  round to a table entry like devfreq_recommended_opp(): down for an
+  upper bound (DEVFREQ_FLAG_LEAST_UPPER_BOUND), up otherwise.
 ---
  adreno-gpulist.h          |  6 +++---
  compat/soc/qcom/socinfo.h |  7 ++++---
  kgsl_iommu.c              | 11 +++++++----
- kgsl_pwrscale.c           | 27 +++++++++++++++++++++------
+ kgsl_pwrscale.c           | 28 ++++++++++++++++++++++------
  kgsl_util.c               |  3 +++
- 5 files changed, 38 insertions(+), 16 deletions(-)
+ 5 files changed, 39 insertions(+), 16 deletions(-)
 
 diff --git a/adreno-gpulist.h b/adreno-gpulist.h
 index 6cafd5b..81ae53b 100644
@@ -126,10 +127,10 @@ index 2c90aaa..26761e3 100644
  		dev_err(&device->pdev->dev, "Couldn't map IOMMU registers\n");
  		ret = -ENOMEM;
 diff --git a/kgsl_pwrscale.c b/kgsl_pwrscale.c
-index f0def2b..4f9ee7e 100644
+index f0def2b..cbf3163 100644
 --- a/kgsl_pwrscale.c
 +++ b/kgsl_pwrscale.c
-@@ -250,13 +250,28 @@ static int kgsl_devfreq_target(struct device *dev, unsigned long *freq, u32 flag
+@@ -250,13 +250,29 @@ static int kgsl_devfreq_target(struct device *dev, unsigned long *freq, u32 flag
  	cur_freq = kgsl_pwrctrl_active_freq(pwr);
  	level = pwr->active_pwrlevel;
  
@@ -137,8 +138,9 @@ index f0def2b..4f9ee7e 100644
 +	/*
 +	 * If the governor recommends a new frequency, update it here. Generic
 +	 * governors such as simple_ondemand ask for frequencies between table
-+	 * entries, so round like devfreq_recommended_opp(): power levels run
-+	 * from the fastest (0) to the slowest.
++	 * entries, so round like devfreq_recommended_opp(): down when the
++	 * frequency is an upper bound, up otherwise. Power levels run from the
++	 * fastest (0) to the slowest.
 +	 */
  	if (rec_freq != cur_freq) {
 -		for (i = 0; i < pwr->num_pwrlevels; i++)
@@ -147,16 +149,16 @@ index f0def2b..4f9ee7e 100644
 -				break;
 -			}
 +		if (flags & DEVFREQ_FLAG_LEAST_UPPER_BOUND) {
-+			level = 0;
-+			for (i = pwr->num_pwrlevels; i-- > 0;)
-+				if (pwr->pwrlevels[i].gpu_freq >= rec_freq) {
++			level = pwr->num_pwrlevels - 1;
++			for (i = 0; i < pwr->num_pwrlevels; i++)
++				if (pwr->pwrlevels[i].gpu_freq <= rec_freq) {
 +					level = i;
 +					break;
 +				}
 +		} else {
-+			level = pwr->num_pwrlevels - 1;
-+			for (i = 0; i < pwr->num_pwrlevels; i++)
-+				if (pwr->pwrlevels[i].gpu_freq <= rec_freq) {
++			level = 0;
++			for (i = pwr->num_pwrlevels; i-- > 0;)
++				if (pwr->pwrlevels[i].gpu_freq >= rec_freq) {
 +					level = i;
 +					break;
 +				}
