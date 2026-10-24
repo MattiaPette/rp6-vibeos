@@ -53,7 +53,7 @@ if [ "$VARIANT" = waydroid ]; then
 else
 	# gamescope is not packaged for arm64: cage + Xwayland, plus the libraries
 	# Valve's ARM64 client links against.
-	variant_pkgs="cage xwayland wlr-randr unzip libgtk2.0-0t64 libnss3 libvdpau1 libxss1 libpci3 libvpx9"
+	variant_pkgs="cage xwayland wlr-randr procps unzip libgtk2.0-0t64 libnss3 libvdpau1 libxss1 libpci3 libvpx9"
 fi
 
 chroot_run apt-get update
