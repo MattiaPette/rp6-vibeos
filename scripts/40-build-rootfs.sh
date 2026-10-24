@@ -63,6 +63,70 @@ echo rp6 > "$R/etc/hostname"
 # zram: half of RAM as compressed swap, no disk swap.
 printf 'ALGO=zstd\nPERCENT=50\n' > "$R/etc/default/zramswap"
 
+# The FAT partition is /boot, so kernel updates and wifi.txt are reachable.
+cat > "$R/etc/fstab" <<-EOF
+	PARTLABEL=$ROOT_LABEL  /      ext4  defaults,noatime  0 1
+	PARTLABEL=rp6-boot     /boot  vfat  defaults,noatime,umask=0077  0 2
+EOF
+
+# Wi-Fi: iwd does DHCP itself. Credentials come from wifi.txt on the FAT
+# partition (two lines: network name, password), which is easy to write
+# from any computer before the first boot.
+install -Dm644 /dev/stdin "$R/etc/iwd/main.conf" <<-'EOF'
+	[General]
+	EnableNetworkConfiguration=true
+EOF
+install -Dm755 /dev/stdin "$R/usr/local/sbin/rp6-wifi-from-boot" <<-'EOF'
+	#!/bin/sh
+	# Turn /boot/wifi.txt into an iwd profile, then delete it.
+	set -eu
+	f=/boot/wifi.txt
+	[ -f "$f" ] || exit 0
+	ssid=$(sed -n 1p "$f" | tr -d '\r')
+	pass=$(sed -n 2p "$f" | tr -d '\r')
+	[ -n "$ssid" ] || exit 0
+	mkdir -p /var/lib/iwd
+	printf '[Security]\nPassphrase=%s\n' "$pass" > "/var/lib/iwd/$ssid.psk"
+	chmod 600 "/var/lib/iwd/$ssid.psk"
+	rm -f "$f"
+EOF
+install -Dm644 /dev/stdin "$R/etc/systemd/system/rp6-wifi-from-boot.service" <<-'EOF'
+	[Unit]
+	Description=Import Wi-Fi credentials from the boot partition
+	RequiresMountsFor=/boot
+	Before=iwd.service
+	ConditionPathExists=/boot/wifi.txt
+
+	[Service]
+	Type=oneshot
+	ExecStart=/usr/local/sbin/rp6-wifi-from-boot
+
+	[Install]
+	WantedBy=multi-user.target
+EOF
+
+# Waydroid's Android images are about 1 GB and need network: download them on
+# the first boot that has Wi-Fi, before the kiosk starts.
+install -Dm644 /dev/stdin "$R/etc/systemd/system/waydroid-firstboot.service" <<-'EOF'
+	[Unit]
+	Description=Download Waydroid images on first boot
+	Wants=network-online.target
+	After=network-online.target
+	Before=waydroid-container.service kiosk.service
+	ConditionPathExists=!/var/lib/waydroid/waydroid.cfg
+
+	[Service]
+	Type=oneshot
+	ExecStart=/usr/bin/waydroid init
+	TimeoutStartSec=infinity
+	# iwd does not report "online", so retry until the download works.
+	Restart=on-failure
+	RestartSec=30
+
+	[Install]
+	WantedBy=multi-user.target
+EOF
+
 # Boot straight into Waydroid's full UI inside cage on tty1.
 install -Dm644 /dev/stdin "$R/etc/systemd/system/kiosk.service" <<-'EOF'
 	[Unit]
@@ -82,7 +146,8 @@ install -Dm644 /dev/stdin "$R/etc/systemd/system/kiosk.service" <<-'EOF'
 	[Install]
 	WantedBy=graphical.target
 EOF
-chroot_run systemctl enable kiosk.service waydroid-container.service zramswap.service iwd.service
+chroot_run systemctl enable kiosk.service waydroid-container.service zramswap.service iwd.service \
+	rp6-wifi-from-boot.service waydroid-firstboot.service
 chroot_run systemctl set-default graphical.target
 chroot_run systemctl disable getty@tty1.service || true
 # Units a handheld does not need.
