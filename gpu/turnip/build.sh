@@ -23,7 +23,7 @@ if [ "${1:-}" = --install-deps ]; then
 	# No libdrm-dev on purpose: libdrm is built static below.
 	DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
 		ca-certificates git build-essential meson ninja-build pkg-config python3-mako python3-yaml \
-		python3-packaging python3-ply bison flex zip binutils \
+		python3-packaging python3-ply bison flex glslang-tools zip binutils \
 		libwayland-dev libwayland-bin wayland-protocols \
 		libx11-dev libx11-xcb-dev libxcb1-dev libxcb-dri3-dev libxcb-present-dev libxcb-randr0-dev \
 		libxcb-shm0-dev libxcb-sync-dev libxcb-xfixes0-dev libxshmfence-dev libxrandr-dev libxext-dev \
