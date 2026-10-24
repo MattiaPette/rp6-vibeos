@@ -5,7 +5,7 @@ A minimal system for the Retroid Pocket 6 (QCS8550, 8 GB) whose only purpose is 
 possible to games and the GPU.
 
 Architecture: Retroid's mainline 7.3 kernel → minimal Debian host → Waydroid (Android in a
-container, with only DroidDeck installed) shown full screen by `cage`. Steam, Proton, FEX,
+container, with only DroidDeck installed) shown full screen by `weston` (kiosk shell, rotated to landscape). Steam, Proton, FEX,
 DXVK and their updates stay managed by DroidDeck.
 
 > Status: early prototype. The kernel-only test image boots from microSD and shows the kernel
@@ -27,7 +27,7 @@ scripts/15-build-kgsl.sh               # optional, experimental: KGSL GPU driver
 scripts/16-build-kgsl-shim.sh          # or instead: msm + a KGSL-style sysfs and node for DroidDeck (gpu/README.md)
 scripts/20-build-audio.sh              # AudioReach topology + UCM
 scripts/30-collect-firmware.sh <dump>  # generic firmware + signed blobs from stock Android
-sudo scripts/40-build-rootfs.sh        # Debian minbase + Waydroid + cage (BUILD_CA=<pem> behind a TLS proxy)
+sudo scripts/40-build-rootfs.sh        # Debian minbase + Waydroid + weston (BUILD_CA=<pem> behind a TLS proxy)
 sudo scripts/50-make-sdimage.sh        # microSD image for OpenABL (no root needed without a rootfs)
 ```
 
@@ -90,9 +90,18 @@ first. To check the version: `fastboot getvar version-bootloader`.
 ## Wi-Fi and Waydroid on first boot
 
 Before the first boot, create `wifi.txt` on the `RP6BOOT` FAT partition with two lines: the
-network name and the password. At boot the system turns it into an iwd profile and deletes the
-file. The first boot also grows the root partition to the whole
-card. On the first boot with network, `waydroid init` downloads the Android images (about
+network name and the password. Three more optional lines set a static IPv4 address instead of
+DHCP: address with prefix, gateway, DNS server (the gateway when left out):
+
+```
+MyNetwork
+MyPassword
+192.168.1.50/24
+192.168.1.1
+```
+
+At boot the system turns it into an iwd profile and deletes the file. The first boot also grows
+the root partition to the whole card; its log is `rp6-grow-root.log` on `RP6BOOT`. On the first boot with network, `waydroid init` downloads the Android images (about
 1 GB); then Waydroid's UI starts full screen.
 
 When `scripts/15-build-kgsl.sh` has run, the image has a second boot entry,
@@ -101,6 +110,10 @@ When `scripts/15-build-kgsl.sh` has run, the image has a second boot entry,
 There is no login prompt on the screen: `deck` (no password) runs the kiosk. For debugging,
 switch to tty2 (`Ctrl+Alt+F2` with a USB keyboard) and log in as `root` (no password on this
 prototype image).
+
+For SSH, copy your public key to `RP6BOOT` as `authorized_keys`
+(`cp ~/.ssh/id_ed25519.pub /Volumes/RP6BOOT/authorized_keys`), then `ssh root@<rp6-ip>`.
+Only key logins are accepted.
 
 ## License
 
