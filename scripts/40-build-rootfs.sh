@@ -53,15 +53,21 @@ chroot_run apt-get install -y \
 	pipewire pipewire-pulse wireplumber alsa-ucm-conf \
 	seatd zram-tools \
 	kmscube vulkan-tools alsa-utils \
-	fdisk e2fsprogs openresolv dropbear-bin
+	fdisk e2fsprogs openresolv dropbear-bin systemd-timesyncd
 chroot_run apt-get clean
 if [ -n "${BUILD_CA:-}" ]; then
 	rm "$R/usr/local/share/ca-certificates/rp6-build-ca.crt"
 	chroot_run update-ca-certificates --fresh >/dev/null
 fi
 rm -rf "$R"/var/lib/apt/lists/*
-# debootstrap copied the build host's resolvers; iwd writes the real ones.
+# debootstrap copied the build host's resolvers. iwd runs resolvconf under
+# ProtectSystem=strict, which keeps it from writing /etc, so resolvconf writes
+# in /run (still writable for it) and /etc/resolv.conf points there.
 rm -f "$R/etc/resolv.conf"
+ln -s /run/resolvconf/resolv.conf "$R/etc/resolv.conf"
+sed -i 's|^#\?resolv_conf=.*|resolv_conf=/run/resolvconf/resolv.conf|' "$R/etc/resolvconf.conf"
+grep -q '^resolv_conf=/run/resolvconf/resolv.conf$' "$R/etc/resolvconf.conf" \
+	|| echo 'resolv_conf=/run/resolvconf/resolv.conf' >> "$R/etc/resolvconf.conf"
 
 # Retroid audio files, firmware and kernel modules from the earlier steps.
 # tar, not cp: /lib is a symlink to usr/lib in Debian and must stay one.
@@ -288,12 +294,12 @@ install -Dm644 /dev/stdin "$R/etc/systemd/system/kiosk.service" <<-'EOF'
 EOF
 chroot_run systemctl enable kiosk.service waydroid-container.service zramswap.service iwd.service \
 	rp6-wifi-from-boot.service waydroid-firstboot.service rp6-grow-root.service \
-	rp6-ssh-keys-from-boot.service dropbear.socket
+	rp6-ssh-keys-from-boot.service dropbear.socket systemd-timesyncd.service
 chroot_run systemctl set-default graphical.target
 chroot_run systemctl disable getty@tty1.service || true
 # Units a handheld does not need.
 chroot_run systemctl mask apt-daily.timer apt-daily-upgrade.timer man-db.timer \
-	e2scrub_all.timer fstrim.timer systemd-timesyncd.service 2>/dev/null || true
+	e2scrub_all.timer fstrim.timer 2>/dev/null || true
 # Pulled in by Waydroid's lxc dependency: Waydroid sets up its own bridge and
 # starts its container itself. cage gets the seat from logind, not seatd.
 chroot_run systemctl disable lxc.service lxc-net.service lxc-monitord.service seatd.service
