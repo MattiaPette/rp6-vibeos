@@ -289,8 +289,13 @@ install -Dm644 /dev/stdin "$R/etc/rp6/weston.ini" <<-'EOF2'
 	transform=rotate-270
 
 	[autolaunch]
-	path=/usr/bin/waydroid
-	args=show-full-ui
+	path=/usr/local/bin/rp6-waydroid-ui
+	watch=true
+EOF2
+# weston's [autolaunch] takes no arguments, hence the wrapper.
+install -Dm755 /dev/stdin "$R/usr/local/bin/rp6-waydroid-ui" <<-'EOF2'
+	#!/bin/sh
+	exec /usr/bin/waydroid show-full-ui
 EOF2
 
 # Boot straight into Waydroid's full UI inside weston on tty1.
