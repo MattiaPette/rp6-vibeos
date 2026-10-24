@@ -37,7 +37,7 @@ nothing in Waydroid needs to change.
    nodes that exist when it starts.
 2. **`/sys/class/kgsl/kgsl-3d0` is a small kernel module.** `kgsl-shim/kgsl_shim.c` registers a
    `kgsl` class with one device and no device node. Its files are read-only and filled from the
-   msm GPU's devfreq (clock, levels, busy time) and the `gpuss-0` thermal zone. It never talks to
+   msm GPU's devfreq (clock, levels, busy time) and the `gpuss-0-thermal` zone. It never talks to
    the GPU. Built by `scripts/16-build-kgsl-shim.sh`, loaded through `modules-load.d`. It is the
    alternative to the real KGSL from `scripts/15-build-kgsl.sh`: both register the `kgsl` class,
    so only one of them can be installed.

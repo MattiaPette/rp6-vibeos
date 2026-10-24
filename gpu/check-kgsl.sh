@@ -44,8 +44,14 @@ if [ -n "$1" ]; then
 	printf '{"file_format_version":"1.0.0","ICD":{"library_path":"%s","api_version":"1.4.0"}}\n' \
 		"$t/libvulkan_freedreno.so" > "$t/icd.json"
 	if command -v vulkaninfo >/dev/null; then
-		VK_DRIVER_FILES=$t/icd.json VK_ICD_FILENAMES=$t/icd.json vulkaninfo --summary 2>&1 \
-			| grep -E 'deviceName|driverName|driverInfo|ERROR' || fail "vulkaninfo found no device"
+		if out=$(VK_DRIVER_FILES=$t/icd.json VK_ICD_FILENAMES=$t/icd.json vulkaninfo --summary 2>&1) \
+			&& echo "$out" | grep -q 'deviceName'; then
+			echo "$out" | grep -E 'deviceName|driverName|driverInfo'
+			pass "Turnip from $1 finds the GPU"
+		else
+			echo "$out" | tail -n 20
+			fail "vulkaninfo found no device with $1"
+		fi
 	else
 		echo "skip Turnip check (no vulkaninfo: apt install vulkan-tools)"
 	fi

@@ -26,7 +26,7 @@ static char *gpu_model = "Adreno740v2";
 module_param(gpu_model, charp, 0444);
 MODULE_PARM_DESC(gpu_model, "Name published in gpu_model (KGSL style)");
 
-static char *thermal_zone = "gpuss-0";
+static char *thermal_zone = "gpuss-0-thermal";
 module_param(thermal_zone, charp, 0444);
 MODULE_PARM_DESC(thermal_zone, "Thermal zone read for temp");
 

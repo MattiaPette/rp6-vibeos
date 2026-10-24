@@ -37,12 +37,12 @@ if dpkg -s libdrm-dev >/dev/null 2>&1; then
 fi
 
 if [ "$LIBDRM_VERSION" = latest ]; then
-	LIBDRM_VERSION=$(git ls-remote --tags --refs "$FDO/libdrm.git" 'libdrm-2.4.*' \
+	LIBDRM_VERSION=$(git ls-remote --tags --refs "$FDO/drm.git" 'libdrm-2.4.*' \
 		| sed 's|.*refs/tags/libdrm-||' | sort -V | tail -1)
 fi
 
 rm -rf "$W" && mkdir -p "$W" "$DEST"
-git clone -q --depth 1 -b "libdrm-$LIBDRM_VERSION" "$FDO/libdrm.git" "$W/libdrm"
+git clone -q --depth 1 -b "libdrm-$LIBDRM_VERSION" "$FDO/drm.git" "$W/libdrm"
 git clone -q --depth 1 -b "mesa-$MESA_VERSION" "$FDO/mesa.git" "$W/mesa"
 for p in "$TOP"/gpu/turnip/patches/*.patch; do
 	[ -e "$p" ] || continue
