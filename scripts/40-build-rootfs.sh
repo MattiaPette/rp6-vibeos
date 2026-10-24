@@ -297,6 +297,13 @@ chroot_run systemctl enable kiosk.service waydroid-container.service zramswap.se
 	rp6-ssh-keys-from-boot.service dropbear.socket systemd-timesyncd.service
 chroot_run systemctl set-default graphical.target
 chroot_run systemctl disable getty@tty1.service || true
+# A short press of the power button must not shut the system down (logind's
+# default): it is how one turns the screen off on a handheld. Hold it to power off.
+install -Dm644 /dev/stdin "$R/etc/systemd/logind.conf.d/10-rp6-power-key.conf" <<-'EOF'
+	[Login]
+	HandlePowerKey=ignore
+	HandlePowerKeyLongPress=poweroff
+EOF
 # Units a handheld does not need.
 chroot_run systemctl mask apt-daily.timer apt-daily-upgrade.timer man-db.timer \
 	e2scrub_all.timer fstrim.timer 2>/dev/null || true
