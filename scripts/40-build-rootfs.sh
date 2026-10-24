@@ -48,7 +48,7 @@ echo "deb [signed-by=/usr/share/keyrings/waydroid.gpg] https://repo.waydro.id/ $
 
 chroot_run apt-get update
 chroot_run apt-get install -y \
-	waydroid cage \
+	waydroid weston bluez \
 	libgl1-mesa-dri mesa-vulkan-drivers \
 	pipewire pipewire-pulse wireplumber alsa-ucm-conf \
 	seatd zram-tools \
@@ -277,7 +277,23 @@ install -Dm644 /dev/stdin "$R/etc/systemd/system/waydroid-firstboot.service" <<-
 	WantedBy=multi-user.target
 EOF
 
-# Boot straight into Waydroid's full UI inside cage on tty1.
+# The panel is natively portrait (1080x1920, DT rotation=270) and cage cannot
+# rotate its output, so use weston's kiosk shell, which can.
+install -Dm644 /dev/stdin "$R/etc/rp6/weston.ini" <<-'EOF2'
+	[core]
+	shell=kiosk-shell.so
+	idle-time=0
+
+	[output]
+	name=DSI-1
+	transform=rotate-270
+
+	[autolaunch]
+	path=/usr/bin/waydroid
+	args=show-full-ui
+EOF2
+
+# Boot straight into Waydroid's full UI inside weston on tty1.
 install -Dm644 /dev/stdin "$R/etc/systemd/system/kiosk.service" <<-'EOF'
 	[Unit]
 	Description=Waydroid kiosk
@@ -290,7 +306,7 @@ install -Dm644 /dev/stdin "$R/etc/systemd/system/kiosk.service" <<-'EOF'
 	TTYPath=/dev/tty1
 	StandardInput=tty
 	Environment=XDG_SESSION_TYPE=wayland
-	ExecStart=/usr/bin/cage -s -- /usr/bin/waydroid show-full-ui
+	ExecStart=/usr/bin/weston --config=/etc/rp6/weston.ini --socket=wayland-1
 	Restart=always
 
 	[Install]
@@ -308,11 +324,35 @@ install -Dm644 /dev/stdin "$R/etc/systemd/logind.conf.d/10-rp6-power-key.conf" <
 	HandlePowerKey=ignore
 	HandlePowerKeyLongPress=poweroff
 EOF
+# Android has no lights HAL here, so brightness lives on the host backlight.
+# Start at half on the first boot only; later boots keep whatever was set.
+install -Dm755 /dev/stdin "$R/usr/local/bin/rp6-brightness" <<-'EOF2'
+	#!/bin/sh
+	# rp6-brightness <0-100>
+	bl=$(ls -d /sys/class/backlight/* | head -n1)
+	max=$(cat "$bl/max_brightness")
+	echo $(( max * $1 / 100 )) > "$bl/brightness"
+EOF2
+install -Dm644 /dev/stdin "$R/etc/systemd/system/rp6-brightness.service" <<-'EOF2'
+	[Unit]
+	Description=Set a sane first-boot brightness
+	ConditionPathExists=!/var/lib/rp6-brightness-set
+	Before=kiosk.service
+
+	[Service]
+	Type=oneshot
+	ExecStart=/usr/local/bin/rp6-brightness 50
+	ExecStartPost=/usr/bin/touch /var/lib/rp6-brightness-set
+
+	[Install]
+	WantedBy=multi-user.target
+EOF2
+chroot_run systemctl enable rp6-brightness.service bluetooth.service
 # Units a handheld does not need.
 chroot_run systemctl mask apt-daily.timer apt-daily-upgrade.timer man-db.timer \
 	e2scrub_all.timer fstrim.timer 2>/dev/null || true
 # Pulled in by Waydroid's lxc dependency: Waydroid sets up its own bridge and
-# starts its container itself. cage gets the seat from logind, not seatd.
+# starts its container itself. weston gets the seat from logind, not seatd.
 chroot_run systemctl disable lxc.service lxc-net.service lxc-monitord.service seatd.service
 
 tar -C "$R" -I 'zstd -19 -T0' -cf "$OUT/rootfs.tar.zst" .

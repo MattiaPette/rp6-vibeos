@@ -5,7 +5,7 @@ A minimal system for the Retroid Pocket 6 (QCS8550, 8 GB) whose only purpose is 
 possible to games and the GPU.
 
 Architecture: Retroid's mainline 7.3 kernel → minimal Debian host → Waydroid (Android in a
-container, with only DroidDeck installed) shown full screen by `cage`. Steam, Proton, FEX,
+container, with only DroidDeck installed) shown full screen by `weston` (kiosk shell, rotated to landscape). Steam, Proton, FEX,
 DXVK and their updates stay managed by DroidDeck.
 
 > Status: early prototype. The kernel-only test image boots from microSD and shows the kernel
@@ -27,7 +27,7 @@ scripts/15-build-kgsl.sh               # optional, experimental: KGSL GPU driver
 scripts/16-build-kgsl-shim.sh          # or instead: msm + a KGSL-style sysfs and node for DroidDeck (gpu/README.md)
 scripts/20-build-audio.sh              # AudioReach topology + UCM
 scripts/30-collect-firmware.sh <dump>  # generic firmware + signed blobs from stock Android
-sudo scripts/40-build-rootfs.sh        # Debian minbase + Waydroid + cage (BUILD_CA=<pem> behind a TLS proxy)
+sudo scripts/40-build-rootfs.sh        # Debian minbase + Waydroid + weston (BUILD_CA=<pem> behind a TLS proxy)
 sudo scripts/50-make-sdimage.sh        # microSD image for OpenABL (no root needed without a rootfs)
 ```
 
