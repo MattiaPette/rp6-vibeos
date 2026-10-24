@@ -4,6 +4,8 @@
 # The prototype uses systemd because Waydroid's container and session units
 # assume it; swapping it for a lighter init is a later trimming step.
 # Needs root, debootstrap and qemu-user-static (binfmt) when not on arm64.
+# Behind a TLS-intercepting proxy, set BUILD_CA=<proxy CA bundle>: it is
+# trusted inside the chroot during the build only, and removed afterwards.
 #
 # Output: $OUT/rootfs/ and $OUT/rootfs.tar.zst
 set -euo pipefail
@@ -19,6 +21,11 @@ debootstrap --arch=arm64 --variant=minbase \
 	"$DEBIAN_SUITE" "$R" "$DEBIAN_MIRROR"
 
 chroot_run() { chroot "$R" /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin DEBIAN_FRONTEND=noninteractive "$@"; }
+
+if [ -n "${BUILD_CA:-}" ]; then
+	install -Dm644 "$BUILD_CA" "$R/usr/local/share/ca-certificates/rp6-build-ca.crt"
+	chroot_run update-ca-certificates >/dev/null
+fi
 
 # Never pull docs, man pages or recommended extras.
 cat > "$R/etc/apt/apt.conf.d/90minimal" <<-EOF
@@ -47,17 +54,25 @@ chroot_run apt-get install -y \
 	seatd zram-tools \
 	kmscube vulkan-tools alsa-utils
 chroot_run apt-get clean
+if [ -n "${BUILD_CA:-}" ]; then
+	rm "$R/usr/local/share/ca-certificates/rp6-build-ca.crt"
+	chroot_run update-ca-certificates --fresh >/dev/null
+fi
 rm -rf "$R"/var/lib/apt/lists/*
 
 # Retroid audio files, firmware and kernel modules from the earlier steps.
-for part in audio firmware; do
-	[ -d "$OUT/$part" ] && cp -a "$OUT/$part/." "$R/"
+# tar, not cp: /lib is a symlink to usr/lib in Debian and must stay one.
+for part in audio firmware kernel/modules; do
+	[ -d "$OUT/$part" ] || continue
+	tar -C "$OUT/$part" -cf - . | tar -C "$R" -xf - --keep-directory-symlink
 done
-[ -d "$OUT/kernel/modules/lib/modules" ] && cp -a "$OUT/kernel/modules/lib/modules" "$R/lib/"
 
 # User that runs the kiosk session.
 chroot_run useradd -m -G video,render,audio,input deck
 chroot_run passwd -d deck
+# Prototype: root without password on the local consoles (tty2-6) for
+# debugging. There is no SSH server, so nothing is reachable over the network.
+chroot_run passwd -d root
 echo rp6 > "$R/etc/hostname"
 
 # zram: half of RAM as compressed swap, no disk swap.

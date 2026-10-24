@@ -27,7 +27,7 @@ scripts/15-build-kgsl.sh               # optional, experimental: KGSL GPU driver
 scripts/16-build-kgsl-shim.sh          # or instead: msm + a KGSL-style sysfs and node for DroidDeck (gpu/README.md)
 scripts/20-build-audio.sh              # AudioReach topology + UCM
 scripts/30-collect-firmware.sh <dump>  # generic firmware + signed blobs from stock Android
-sudo scripts/40-build-rootfs.sh        # Debian minbase + Waydroid + cage
+sudo scripts/40-build-rootfs.sh        # Debian minbase + Waydroid + cage (BUILD_CA=<pem> behind a TLS proxy)
 sudo scripts/50-make-sdimage.sh        # microSD image for OpenABL (no root needed without a rootfs)
 ```
 
@@ -80,6 +80,20 @@ first. To check the version: `fastboot getvar version-bootloader`.
    (or with balenaEtcher or Raspberry Pi Imager).
 3. Power on while holding Vol down, set *Boot mode* to Linux and *Boot source* to SD card, then
    *Start*. Holding Vol up at power-on goes back to Android.
+
+4. The kernel-only image saves the boot logs to `rp6-log/` on the FAT partition (`RP6BOOT`)
+   for 2 minutes, readable from any computer.
+
+## Wi-Fi and Waydroid on first boot
+
+Before the first boot, create `wifi.txt` on the `RP6BOOT` FAT partition with two lines: the
+network name and the password. At boot the system turns it into an iwd profile and deletes the
+file. On the first boot with network, `waydroid init` downloads the Android images (about
+1 GB); then Waydroid's UI starts full screen.
+
+There is no login prompt on the screen: `deck` (no password) runs the kiosk. For debugging,
+switch to tty2 (`Ctrl+Alt+F2` with a USB keyboard) and log in as `root` (no password on this
+prototype image).
 
 ## License
 
