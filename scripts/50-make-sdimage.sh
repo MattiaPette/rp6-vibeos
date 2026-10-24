@@ -44,12 +44,22 @@ cat > "$W/extlinux.conf" <<-EOF
 	  FDT /dtbs/$DTB
 	  APPEND $CMDLINE
 EOF
+# One more entry per bring-up device tree, picked from OpenABL's Boot entries.
+for t in "$K"/dtbs-test/*.dtb; do
+	[ -e "$t" ] || continue
+	n=$(basename "$t" .dtb)
+	printf 'LABEL %s\n  LINUX /Image\n  FDT /dtbs/test/%s.dtb\n  APPEND %s\n' "$n" "$n" "$CMDLINE" >> "$W/extlinux.conf"
+done
 truncate -s "${ESP_MB}M" "$W/esp.img"
 mkfs.vfat -F 32 -n RP6BOOT "$W/esp.img" >/dev/null
 mmd -i "$W/esp.img" ::/extlinux ::/dtbs ::/dtbs/qcom
 mcopy -i "$W/esp.img" "$W/extlinux.conf" ::/extlinux/extlinux.conf
 mcopy -i "$W/esp.img" "$K/Image" ::/Image
 mcopy -i "$W/esp.img" "$K/rp6.dtb" "::/dtbs/$DTB"
+if compgen -G "$K/dtbs-test/*.dtb" >/dev/null; then
+	mmd -i "$W/esp.img" ::/dtbs/test
+	mcopy -i "$W/esp.img" "$K"/dtbs-test/*.dtb ::/dtbs/test/
+fi
 
 # Root
 mkfs.ext4 -q -L "$ROOT_LABEL" -d "$root_src" "$W/root.img" "${ROOT_MB}M"
