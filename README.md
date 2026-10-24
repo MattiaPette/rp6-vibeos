@@ -68,3 +68,8 @@ first. To check the version: `fastboot getvar version-bootloader`.
    (or with balenaEtcher or Raspberry Pi Imager).
 3. Power on while holding Vol down, set *Boot mode* to Linux and *Boot source* to SD card, then
    *Start*. Holding Vol up at power-on goes back to Android.
+
+## License
+
+GPL-2.0-only, the same license as the Linux kernel; see [LICENSE](LICENSE). Patches in
+`kernel/patches/` keep their upstream authors' copyright.
