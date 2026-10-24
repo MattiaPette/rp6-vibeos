@@ -53,7 +53,7 @@ chroot_run apt-get install -y \
 	pipewire pipewire-pulse wireplumber alsa-ucm-conf \
 	seatd zram-tools \
 	kmscube vulkan-tools alsa-utils \
-	fdisk e2fsprogs openresolv
+	fdisk e2fsprogs openresolv dropbear-bin
 chroot_run apt-get clean
 if [ -n "${BUILD_CA:-}" ]; then
 	rm "$R/usr/local/share/ca-certificates/rp6-build-ca.crt"
@@ -114,6 +114,11 @@ install -Dm755 /dev/stdin "$R/usr/local/sbin/rp6-wifi-from-boot" <<-'EOF'
 	[ -f "$f" ] || exit 0
 	ssid=$(sed -n 1p "$f" | tr -d '\r')
 	pass=$(sed -n 2p "$f" | tr -d '\r')
+	# Optional static IPv4: line 3 address/prefix, line 4 gateway, line 5 DNS
+	# (the gateway when empty). Without line 3 iwd uses DHCP.
+	addr=$(sed -n 3p "$f" | tr -d '\r ')
+	gw=$(sed -n 4p "$f" | tr -d '\r ')
+	dns=$(sed -n 5p "$f" | tr -d '\r ')
 	[ -n "$ssid" ] || exit 0
 	# iwd names profiles after the SSID only when it is plain alphanumeric,
 	# space, - or _; any other SSID is written as = and its hex bytes.
@@ -124,6 +129,18 @@ install -Dm755 /dev/stdin "$R/usr/local/sbin/rp6-wifi-from-boot" <<-'EOF'
 	mkdir -p /var/lib/iwd
 	umask 077
 	printf '[Security]\nPassphrase=%s\n' "$pass" > "/var/lib/iwd/$name.psk"
+	if [ -n "$addr" ]; then
+		bits=${addr#*/}
+		[ "$bits" != "$addr" ] || bits=24
+		# Prefix length to dotted netmask, which is what iwd wants.
+		mask= n=$bits
+		for i in 1 2 3 4; do
+			if [ "$n" -ge 8 ]; then o=255; n=$((n - 8)); else o=$((256 - (1 << (8 - n)))); n=0; fi
+			mask=$mask${mask:+.}$o
+		done
+		printf '\n[IPv4]\nAddress=%s\nNetmask=%s\nGateway=%s\nDNS=%s\n' \
+			"${addr%/*}" "$mask" "$gw" "${dns:-$gw}" >> "/var/lib/iwd/$name.psk"
+	fi
 	rm -f "$f"
 EOF
 install -Dm644 /dev/stdin "$R/etc/systemd/system/rp6-wifi-from-boot.service" <<-'EOF'
@@ -178,6 +195,51 @@ install -Dm644 /dev/stdin "$R/etc/systemd/system/rp6-grow-root.service" <<-'EOF'
 	WantedBy=multi-user.target
 EOF
 
+# SSH for debugging from a computer: dropbear (small, socket-activated so it
+# costs no RAM while idle), key login only. The key comes from
+# authorized_keys on the FAT partition, copied over on every boot.
+install -Dm755 /dev/stdin "$R/usr/local/sbin/rp6-ssh-keys-from-boot" <<-'EOF'
+	#!/bin/sh
+	set -eu
+	[ -f /boot/authorized_keys ] || exit 0
+	install -d -m700 /root/.ssh
+	tr -d '\r' < /boot/authorized_keys > /root/.ssh/authorized_keys
+	chmod 600 /root/.ssh/authorized_keys
+EOF
+install -Dm644 /dev/stdin "$R/etc/systemd/system/rp6-ssh-keys-from-boot.service" <<-'EOF'
+	[Unit]
+	Description=Import SSH keys from the boot partition
+	RequiresMountsFor=/boot
+
+	[Service]
+	Type=oneshot
+	ExecStart=/usr/local/sbin/rp6-ssh-keys-from-boot
+
+	[Install]
+	WantedBy=multi-user.target
+EOF
+install -Dm644 /dev/stdin "$R/etc/systemd/system/dropbear.socket" <<-'EOF'
+	[Unit]
+	Description=SSH (dropbear)
+
+	[Socket]
+	ListenStream=22
+	Accept=yes
+
+	[Install]
+	WantedBy=sockets.target
+EOF
+install -Dm644 /dev/stdin "$R/etc/systemd/system/dropbear@.service" <<-'EOF'
+	[Unit]
+	Description=SSH session (dropbear)
+
+	[Service]
+	# -i: inetd mode, -s: no password logins, -R: make host keys on first use
+	ExecStart=-/usr/sbin/dropbear -i -s -R
+	StandardInput=socket
+	StandardError=journal
+EOF
+
 # Waydroid's Android images are about 1 GB and need network: download them on
 # the first boot that has Wi-Fi, before the kiosk starts.
 install -Dm644 /dev/stdin "$R/etc/systemd/system/waydroid-firstboot.service" <<-'EOF'
@@ -222,7 +284,8 @@ install -Dm644 /dev/stdin "$R/etc/systemd/system/kiosk.service" <<-'EOF'
 	WantedBy=graphical.target
 EOF
 chroot_run systemctl enable kiosk.service waydroid-container.service zramswap.service iwd.service \
-	rp6-wifi-from-boot.service waydroid-firstboot.service rp6-grow-root.service
+	rp6-wifi-from-boot.service waydroid-firstboot.service rp6-grow-root.service \
+	rp6-ssh-keys-from-boot.service dropbear.socket
 chroot_run systemctl set-default graphical.target
 chroot_run systemctl disable getty@tty1.service || true
 # Units a handheld does not need.

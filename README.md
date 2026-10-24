@@ -90,9 +90,18 @@ first. To check the version: `fastboot getvar version-bootloader`.
 ## Wi-Fi and Waydroid on first boot
 
 Before the first boot, create `wifi.txt` on the `RP6BOOT` FAT partition with two lines: the
-network name and the password. At boot the system turns it into an iwd profile and deletes the
-file. The first boot also grows the root partition to the whole
-card. On the first boot with network, `waydroid init` downloads the Android images (about
+network name and the password. Three more optional lines set a static IPv4 address instead of
+DHCP: address with prefix, gateway, DNS server (the gateway when left out):
+
+```
+MyNetwork
+MyPassword
+192.168.1.50/24
+192.168.1.1
+```
+
+At boot the system turns it into an iwd profile and deletes the file. The first boot also grows
+the root partition to the whole card; its log is `rp6-grow-root.log` on `RP6BOOT`. On the first boot with network, `waydroid init` downloads the Android images (about
 1 GB); then Waydroid's UI starts full screen.
 
 When `scripts/15-build-kgsl.sh` has run, the image has a second boot entry,
@@ -101,6 +110,10 @@ When `scripts/15-build-kgsl.sh` has run, the image has a second boot entry,
 There is no login prompt on the screen: `deck` (no password) runs the kiosk. For debugging,
 switch to tty2 (`Ctrl+Alt+F2` with a USB keyboard) and log in as `root` (no password on this
 prototype image).
+
+For SSH, copy your public key to `RP6BOOT` as `authorized_keys`
+(`cp ~/.ssh/id_ed25519.pub /Volumes/RP6BOOT/authorized_keys`), then `ssh root@<rp6-ip>`.
+Only key logins are accepted.
 
 ## License
 
