@@ -3,3 +3,6 @@
 /out-*.log
 __pycache__/
 /rp6-dumps/
+*.img
+*.img.xz
+.DS_Store
