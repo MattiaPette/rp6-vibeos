@@ -352,7 +352,31 @@ install -Dm644 /dev/stdin "$R/etc/systemd/system/rp6-brightness.service" <<-'EOF
 	[Install]
 	WantedBy=multi-user.target
 EOF2
-chroot_run systemctl enable rp6-brightness.service bluetooth.service
+# The SoC passes no addresses to Linux: the WCN7850 Bluetooth controller stays
+# "unconfigured" and ath12k picks a random Wi-Fi MAC on every boot. Derive stable
+# locally administered ones from machine-id.
+install -Dm755 /dev/stdin "$R/usr/local/bin/rp6-stable-macs" <<-'EOF2'
+	#!/bin/sh
+	mac() { printf '%s' "$(cat /etc/machine-id)$1" | md5sum | sed 's/^\(..\)\(..\)\(..\)\(..\)\(..\).*/02:\1:\2:\3:\4:\5/'; }
+	for i in $(seq 40); do [ -e /sys/class/net/wlan0 ] && break; sleep 0.5; done
+	ip link set dev wlan0 address "$(mac wifi)" || true
+	for i in $(seq 40); do [ -e /sys/class/bluetooth/hci0 ] && break; sleep 0.5; done
+	btmgmt --index 0 public-addr "$(mac bt)" || true
+EOF2
+install -Dm644 /dev/stdin "$R/etc/systemd/system/rp6-stable-macs.service" <<-'EOF2'
+	[Unit]
+	Description=Set stable Wi-Fi and Bluetooth addresses
+	Before=iwd.service bluetooth.service
+	Wants=iwd.service bluetooth.service
+
+	[Service]
+	Type=oneshot
+	ExecStart=/usr/local/bin/rp6-stable-macs
+
+	[Install]
+	WantedBy=multi-user.target
+EOF2
+chroot_run systemctl enable rp6-brightness.service bluetooth.service rp6-stable-macs.service
 # Units a handheld does not need.
 chroot_run systemctl mask apt-daily.timer apt-daily-upgrade.timer man-db.timer \
 	e2scrub_all.timer fstrim.timer 2>/dev/null || true
