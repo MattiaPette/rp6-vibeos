@@ -3,13 +3,15 @@
  *
  * The screen may stay black while bring-up is in progress, so this init saves
  * what the kernel says to the microSD's FAT partition, which a Mac or PC can
- * read: rp6-log/dmesg.txt (kernel log) and rp6-log/deferred.txt (drivers
- * still waiting for something). Both are rewritten every 5 seconds for two
- * minutes; then init just sleeps.
+ * read: rp6-log/dmesg.txt (kernel log), plus a copy of each debugfs and sysfs
+ * file in `snapshots` (drivers still waiting for something, display and
+ * backlight state, regulators), named after its path. Everything is rewritten
+ * every 5 seconds for two minutes; then init just sleeps.
  *
  * Build: aarch64-linux-gnu-gcc -static -Os -o init diag-init.c
  */
 #include <fcntl.h>
+#include <glob.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/klog.h>
@@ -17,7 +19,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#define LOG_BUF (4 << 20)
+#define LOG_BUF (16 << 20)
 #define SYSLOG_ACTION_READ_ALL 3	/* glibc does not export the names */
 
 static char buf[LOG_BUF];
@@ -47,6 +49,42 @@ static void copy_file(const char *from, const char *to)
 	save(to, buf, len);
 }
 
+static const char *const snapshots[] = {
+	"/sys/kernel/debug/devices_deferred",
+	"/sys/kernel/debug/dri/*/state",
+	"/sys/kernel/debug/dri/*/clients",
+	"/sys/kernel/debug/regulator/regulator_summary",
+	"/sys/class/drm/*/status",
+	"/sys/class/drm/*/enabled",
+	"/sys/class/drm/*/modes",
+	"/sys/class/backlight/*/brightness",
+	"/sys/class/backlight/*/actual_brightness",
+	"/sys/class/backlight/*/bl_power",
+	"/sys/class/graphics/fb*/name",
+	"/sys/class/graphics/fb*/virtual_size",
+};
+
+/* /sys/class/drm/card0-DSI-1/status -> /boot/rp6-log/class_drm_card0-DSI-1_status.txt */
+static void snapshot(const char *pattern)
+{
+	glob_t g;
+	char to[256];
+
+	if (glob(pattern, 0, NULL, &g) != 0)
+		return;
+	for (size_t i = 0; i < g.gl_pathc; i++) {
+		const char *from = g.gl_pathv[i];
+		const char *name = strncmp(from, "/sys/kernel/debug/", 18) == 0 ? from + 18 : from + 5;
+		int n = snprintf(to, sizeof(to), "/boot/rp6-log/%s.txt", name);
+
+		for (char *c = to + 14; c < to + n - 4; c++)
+			if (*c == '/')
+				*c = '_';
+		copy_file(from, to);
+	}
+	globfree(&g);
+}
+
 static int mount_esp(void)
 {
 	/* The SD card is the only mmc device; its first partition is the ESP. */
@@ -71,7 +109,8 @@ int main(void)
 			mkdir("/boot/rp6-log", 0755);
 			save("/boot/rp6-log/dmesg.txt", buf,
 			     klogctl(SYSLOG_ACTION_READ_ALL, buf, LOG_BUF));
-			copy_file("/sys/kernel/debug/devices_deferred", "/boot/rp6-log/deferred.txt");
+			for (unsigned j = 0; j < sizeof(snapshots) / sizeof(snapshots[0]); j++)
+				snapshot(snapshots[j]);
 			umount("/boot");
 		}
 		sleep(5);
