@@ -218,6 +218,8 @@ install -Dm644 /dev/stdin "$R/etc/systemd/system/rp6-ssh-keys-from-boot.service"
 	[Install]
 	WantedBy=multi-user.target
 EOF
+# dropbear -R writes its host keys here, but dropbear-bin does not create it.
+install -d -m700 "$R/etc/dropbear"
 install -Dm644 /dev/stdin "$R/etc/systemd/system/dropbear.socket" <<-'EOF'
 	[Unit]
 	Description=SSH (dropbear)
