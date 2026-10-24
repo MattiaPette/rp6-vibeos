@@ -140,8 +140,9 @@ install -Dm755 /dev/stdin "$R/usr/local/sbin/rp6-wifi-from-boot" <<-'EOF'
 	esac
 	mkdir -p /var/lib/iwd
 	umask 077
-	# Stable Wi-Fi MAC (locally administered) derived from machine-id.
-	mac=$(printf '%s' "$(cat /etc/machine-id)wifi" | md5sum | sed 's/^\(..\)\(..\)\(..\)\(..\)\(..\).*/02:\1:\2:\3:\4:\5/')
+	# Stable Wi-Fi MAC (locally administered) derived from the SoC serial, which
+	# survives reflashing; machine-id is baked into the image, so only a fallback.
+	mac=$(printf '%s' "$(cat /sys/devices/soc0/serial_number 2>/dev/null || cat /etc/machine-id)wifi" | md5sum | sed 's/^\(..\)\(..\)\(..\)\(..\)\(..\).*/02:\1:\2:\3:\4:\5/')
 	printf '[Settings]\nAddressOverride=%s\n\n[Security]\nPassphrase=%s\n' "$mac" "$pass" > "/var/lib/iwd/$name.psk"
 	if [ -n "$addr" ]; then
 		bits=${addr#*/}
@@ -358,10 +359,10 @@ install -Dm644 /dev/stdin "$R/etc/systemd/system/rp6-brightness.service" <<-'EOF
 EOF2
 # The SoC passes no addresses to Linux: the WCN7850 Bluetooth controller stays
 # "unconfigured" and ath12k picks a random Wi-Fi MAC on every boot. Derive stable
-# locally administered ones from machine-id (Wi-Fi: see rp6-wifi-from-boot).
+# locally administered ones from the SoC serial (Wi-Fi: see rp6-wifi-from-boot).
 install -Dm755 /dev/stdin "$R/usr/local/bin/rp6-stable-macs" <<-'EOF2'
 	#!/bin/sh
-	mac() { printf '%s' "$(cat /etc/machine-id)$1" | md5sum | sed 's/^\(..\)\(..\)\(..\)\(..\)\(..\).*/02:\1:\2:\3:\4:\5/'; }
+	mac() { printf '%s' "$(cat /sys/devices/soc0/serial_number 2>/dev/null || cat /etc/machine-id)$1" | md5sum | sed 's/^\(..\)\(..\)\(..\)\(..\)\(..\).*/02:\1:\2:\3:\4:\5/'; }
 	for i in $(seq 40); do [ -e /sys/class/bluetooth/hci0 ] && break; sleep 0.5; done
 	btmgmt --index 0 public-addr "$(mac bt)" || true
 EOF2
