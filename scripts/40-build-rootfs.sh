@@ -53,7 +53,7 @@ chroot_run apt-get install -y \
 	pipewire pipewire-pulse wireplumber alsa-ucm-conf \
 	seatd zram-tools \
 	kmscube vulkan-tools alsa-utils \
-	fdisk openresolv
+	fdisk e2fsprogs openresolv
 chroot_run apt-get clean
 if [ -n "${BUILD_CA:-}" ]; then
 	rm "$R/usr/local/share/ca-certificates/rp6-build-ca.crt"
