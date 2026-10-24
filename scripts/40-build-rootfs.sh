@@ -151,7 +151,8 @@ install -Dm755 /dev/stdin "$R/usr/local/sbin/rp6-grow-root" <<-'EOF'
 	name=${dev#/dev/}
 	disk=/dev/$(lsblk -no PKNAME "$dev")
 	part=$(cat "/sys/class/block/$name/partition")
-	sfdisk -q --relocate gpt-bak-std "$disk"
+	# --force: the disk is in use (it holds /). The write also moves the
+	# backup GPT header to the new end of the card.
 	echo ', +' | sfdisk -q --no-reread --force -N "$part" "$disk"
 	partx -u -n "$part" "$disk"
 	resize2fs "$dev"
