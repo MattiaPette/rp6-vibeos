@@ -50,12 +50,21 @@ for t in "$K"/dtbs-test/*.dtb; do
 	n=$(basename "$t" .dtb)
 	printf 'LABEL %s\n  LINUX /Image\n  FDT /dtbs/test/%s.dtb\n  APPEND %s\n' "$n" "$n" "$CMDLINE" >> "$W/extlinux.conf"
 done
+# Experimental KGSL entry (15-build-kgsl.sh): its tree gives the GPU to KGSL,
+# so the kgsl-shim that fakes KGSL on top of msm must stay unloaded.
+if [ -f "$OUT/kgsl/rp6-kgsl.dtb" ]; then
+	printf 'LABEL rp6-vibeos-kgsl\n  LINUX /Image\n  FDT /dtbs/kgsl/rp6-kgsl.dtb\n  APPEND %s modprobe.blacklist=kgsl_shim\n' "$CMDLINE" >> "$W/extlinux.conf"
+fi
 truncate -s "${ESP_MB}M" "$W/esp.img"
 mkfs.vfat -F 32 -n RP6BOOT "$W/esp.img" >/dev/null
 mmd -i "$W/esp.img" ::/extlinux ::/dtbs ::/dtbs/qcom
 mcopy -i "$W/esp.img" "$W/extlinux.conf" ::/extlinux/extlinux.conf
 mcopy -i "$W/esp.img" "$K/Image" ::/Image
 mcopy -i "$W/esp.img" "$K/rp6.dtb" "::/dtbs/$DTB"
+if [ -f "$OUT/kgsl/rp6-kgsl.dtb" ]; then
+	mmd -i "$W/esp.img" ::/dtbs/kgsl
+	mcopy -i "$W/esp.img" "$OUT/kgsl/rp6-kgsl.dtb" ::/dtbs/kgsl/
+fi
 if compgen -G "$K/dtbs-test/*.dtb" >/dev/null; then
 	mmd -i "$W/esp.img" ::/dtbs/test
 	mcopy -i "$W/esp.img" "$K"/dtbs-test/*.dtb ::/dtbs/test/

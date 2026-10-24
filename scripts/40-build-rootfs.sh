@@ -52,7 +52,8 @@ chroot_run apt-get install -y \
 	libgl1-mesa-dri mesa-vulkan-drivers \
 	pipewire pipewire-pulse wireplumber alsa-ucm-conf \
 	seatd zram-tools \
-	kmscube vulkan-tools alsa-utils
+	kmscube vulkan-tools alsa-utils \
+	fdisk
 chroot_run apt-get clean
 if [ -n "${BUILD_CA:-}" ]; then
 	rm "$R/usr/local/share/ca-certificates/rp6-build-ca.crt"
@@ -62,10 +63,18 @@ rm -rf "$R"/var/lib/apt/lists/*
 
 # Retroid audio files, firmware and kernel modules from the earlier steps.
 # tar, not cp: /lib is a symlink to usr/lib in Debian and must stay one.
-for part in audio firmware kernel/modules; do
+# kgsl-shim/root is the /dev/kgsl-3d0 overlay from 16-build-kgsl-shim.sh.
+for part in audio firmware kernel/modules kgsl-shim/root; do
 	[ -d "$OUT/$part" ] || continue
 	tar -C "$OUT/$part" -cf - . | tar -C "$R" -xf - --keep-directory-symlink
 done
+# The real KGSL from 15-build-kgsl.sh only binds with its own device tree,
+# which the SD image offers as a separate boot entry.
+if [ -f "$OUT/kgsl/msm_kgsl.ko" ]; then
+	kver=$(cat "$OUT/kernel/build/include/config/kernel.release")
+	install -Dm644 "$OUT/kgsl/msm_kgsl.ko" "$R/lib/modules/$kver/extra/msm_kgsl.ko"
+	depmod -b "$R" "$kver"
+fi
 
 # User that runs the kiosk session.
 chroot_run useradd -m -G video,render,audio,input deck
@@ -120,6 +129,36 @@ install -Dm644 /dev/stdin "$R/etc/systemd/system/rp6-wifi-from-boot.service" <<-
 	WantedBy=multi-user.target
 EOF
 
+# The image is only as big as the rootfs; grow the root partition and its
+# filesystem to the whole card on first boot, before Waydroid needs the space.
+install -Dm755 /dev/stdin "$R/usr/local/sbin/rp6-grow-root" <<-'EOF'
+	#!/bin/sh
+	# Grow the partition holding / to the end of its disk, then ext4 online.
+	set -eu
+	dev=$(findmnt -no SOURCE /)
+	name=${dev#/dev/}
+	disk=/dev/$(lsblk -no PKNAME "$dev")
+	part=$(cat "/sys/class/block/$name/partition")
+	sfdisk -q --relocate gpt-bak-std "$disk"
+	echo ', +' | sfdisk -q --no-reread --force -N "$part" "$disk"
+	partx -u -n "$part" "$disk"
+	resize2fs "$dev"
+	touch /var/lib/rp6-root-grown
+EOF
+install -Dm644 /dev/stdin "$R/etc/systemd/system/rp6-grow-root.service" <<-'EOF'
+	[Unit]
+	Description=Grow the root partition to the whole card
+	Before=waydroid-firstboot.service
+	ConditionPathExists=!/var/lib/rp6-root-grown
+
+	[Service]
+	Type=oneshot
+	ExecStart=/usr/local/sbin/rp6-grow-root
+
+	[Install]
+	WantedBy=multi-user.target
+EOF
+
 # Waydroid's Android images are about 1 GB and need network: download them on
 # the first boot that has Wi-Fi, before the kiosk starts.
 install -Dm644 /dev/stdin "$R/etc/systemd/system/waydroid-firstboot.service" <<-'EOF'
@@ -162,12 +201,15 @@ install -Dm644 /dev/stdin "$R/etc/systemd/system/kiosk.service" <<-'EOF'
 	WantedBy=graphical.target
 EOF
 chroot_run systemctl enable kiosk.service waydroid-container.service zramswap.service iwd.service \
-	rp6-wifi-from-boot.service waydroid-firstboot.service
+	rp6-wifi-from-boot.service waydroid-firstboot.service rp6-grow-root.service
 chroot_run systemctl set-default graphical.target
 chroot_run systemctl disable getty@tty1.service || true
 # Units a handheld does not need.
 chroot_run systemctl mask apt-daily.timer apt-daily-upgrade.timer man-db.timer \
 	e2scrub_all.timer fstrim.timer systemd-timesyncd.service 2>/dev/null || true
+# Pulled in by Waydroid's lxc dependency: Waydroid sets up its own bridge and
+# starts its container itself. cage gets the seat from logind, not seatd.
+chroot_run systemctl disable lxc.service lxc-net.service lxc-monitord.service seatd.service
 
 tar -C "$R" -I 'zstd -19 -T0' -cf "$OUT/rootfs.tar.zst" .
 du -sh "$R" "$OUT/rootfs.tar.zst"
