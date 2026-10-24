@@ -1,38 +1,42 @@
 # rp6-vibeos
 
-Sistema minimale per il Retroid Pocket 6 (QCS8550, 8 GB) il cui unico scopo è far girare
-[DroidDeck](https://github.com/Droid-Deck/DroidDeck) lasciando a giochi e GPU più RAM e spazio possibile.
+A minimal system for the Retroid Pocket 6 (QCS8550, 8 GB) whose only purpose is to run
+[DroidDeck](https://github.com/Droid-Deck/DroidDeck) while leaving as much RAM and storage as
+possible to games and the GPU.
 
-Architettura: kernel mainline 7.3 di Retroid → host Debian minimale → Waydroid (Android in
-container, solo DroidDeck installato) mostrato a tutto schermo da `cage`. Steam, Proton, FEX,
-DXVK e i loro aggiornamenti restano gestiti da DroidDeck.
+Architecture: Retroid's mainline 7.3 kernel → minimal Debian host → Waydroid (Android in a
+container, with only DroidDeck installed) shown full screen by `cage`. Steam, Proton, FEX,
+DXVK and their updates stay managed by DroidDeck.
 
-> Stato: prototipo, mai avviato su hardware. La GPU dentro DroidDeck richiede ancora lavoro:
-> DroidDeck cerca il driver Android KGSL (`/dev/kgsl-3d0`), che il kernel mainline non ha.
+> Status: early prototype. The kernel-only test image boots from microSD and shows the kernel
+> log on the built-in display; the full rootfs has not been booted yet. GPU support inside
+> DroidDeck still needs work: DroidDeck looks for the Android KGSL driver (`/dev/kgsl-3d0`),
+> which the mainline kernel does not have.
 
 ## Build
 
-Su un host Linux x86_64 o arm64 con `gcc-aarch64-linux-gnu`, `bc`, `flex`, `bison`,
+On an x86_64 or arm64 Linux host with `gcc-aarch64-linux-gnu`, `bc`, `flex`, `bison`,
 `libssl-dev`, `device-tree-compiler`, `m4`, `alsa-utils` (`alsatplg`), `dosfstools`,
 `mtools`, `e2fsprogs`, `fdisk` (`sfdisk`), `debootstrap`, `qemu-user-static`, `zstd`:
 
 ```sh
-scripts/01-fetch-sources.sh            # kernel, topology, UCM, linux-firmware (solo i file utili)
-scripts/10-build-kernel.sh             # config RP6 + driver ricavati dal device tree
-scripts/20-build-audio.sh              # topology AudioReach + UCM
-scripts/30-collect-firmware.sh <dump>  # firmware generici + blob firmati dall'Android stock
+scripts/01-fetch-sources.sh            # kernel, topology, UCM, linux-firmware (only the files needed)
+scripts/10-build-kernel.sh             # RP6 config + drivers derived from the device tree
+scripts/20-build-audio.sh              # AudioReach topology + UCM
+scripts/30-collect-firmware.sh <dump>  # generic firmware + signed blobs from stock Android
 sudo scripts/40-build-rootfs.sh        # Debian minbase + Waydroid + cage
-sudo scripts/50-make-sdimage.sh        # immagine microSD per OpenABL (senza rootfs basta l'utente normale)
+sudo scripts/50-make-sdimage.sh        # microSD image for OpenABL (no root needed without a rootfs)
 ```
 
-Le impostazioni comuni sono in `config.env`, il frammento del kernel in `kernel/rp6.config`.
-`scripts/dt2config.py` legge il DTB dell'RP6 e abilita i driver di ogni nodo attivo, così il
-config non va scritto a mano.
+Shared settings live in `config.env`, the kernel config fragment in `kernel/rp6.config`.
+`scripts/dt2config.py` reads the RP6 DTB and enables the driver for every active node, so the
+config does not have to be written by hand.
 
-## Firmware firmati
+## Signed firmware
 
-GPU zap shader, ADSP e CDSP sono firmati per il device e si trovano solo nell'Android stock.
-Prima di toccare il device copia le partizioni e le cartelle firmware, ad esempio:
+The GPU zap shader, ADSP and CDSP firmware are signed for the device and only exist in stock
+Android. Before changing anything on the device, copy the firmware partitions and folders, for
+example:
 
 ```sh
 adb pull /vendor/firmware      dump/vendor-firmware
@@ -40,26 +44,32 @@ adb pull /vendor/firmware_mnt  dump/firmware_mnt
 adb pull /vendor/dsp           dump/dsp
 ```
 
-Se ci sono solo file `.mdt` + `.bNN` serve [pil-squasher](https://github.com/linux-msm/pil-squasher).
+If there are only `.mdt` + `.bNN` files, you need
+[pil-squasher](https://github.com/linux-msm/pil-squasher).
 
-## Primo avvio (Android resta intatto)
+## First boot (Android stays intact)
 
-Il bootloader è [OpenABL](https://github.com/OpenHandheldCollective/OpenABL), lo stesso che
-installa ROCKNIX (versione 1.1 o successiva). Avvia Linux dalla microSD leggendo
-`extlinux/extlinux.conf` dalla partizione FAT.
+The bootloader is [OpenABL](https://github.com/OpenHandheldCollective/OpenABL), the same one
+ROCKNIX installs (version 1.1 or later). It boots Linux from the microSD by reading
+`extlinux/extlinux.conf` from the FAT partition.
 
-**Prerequisito:** OpenABL deve essere già installato al posto dell'ABL di Retroid. Con l'ABL
-originale scrivere la microSD non basta, e il menu del punto 3 non esiste. Se non è installato,
-segui le [istruzioni di OpenABL](https://github.com/OpenHandheldCollective/OpenABL#using-it)
-(scrittura di `abl_a` e `abl_b` da fastboot) oppure la
-[guida ROCKNIX per l'RP6](https://rocknix.org/devices/retroid/retroid-pocket-6/), che salva anche
-l'ABL originale. È l'unico passo che scrive sulla memoria interna: prima fai un backup.
-Per controllare la versione: `fastboot getvar version-bootloader`.
+**Prerequisite:** OpenABL must already be installed in place of Retroid's ABL. With the stock
+ABL, writing the microSD is not enough and the menu in step 3 does not exist. If it is not
+installed, follow the [OpenABL instructions](https://github.com/OpenHandheldCollective/OpenABL#using-it)
+(flashing `abl_a` and `abl_b` from fastboot) or the
+[ROCKNIX guide for the RP6](https://rocknix.org/devices/retroid/retroid-pocket-6/), which also
+backs up the stock ABL. This is the only step that writes to internal storage: make a backup
+first. To check the version: `fastboot getvar version-bootloader`.
 
-1. `scripts/50-make-sdimage.sh` crea `out/rp6-sd.img`: partizione FAT con kernel, DTB ed
-   extlinux.conf, poi la partizione ext4 `rp6-root`. Senza rootfs crea un'immagine di solo
-   kernel, utile per controllare schermo e log di avvio.
-2. Scrivila sulla microSD: `dd if=out/rp6-sd.img of=/dev/<sd> bs=4M conv=fsync`
-   (oppure con balenaEtcher o Raspberry Pi Imager).
-3. Accendi tenendo Vol giù, imposta *Boot mode* su Linux e *Boot source* su SD card, poi *Start*.
-   Con Vol su all'accensione si torna ad Android.
+1. `scripts/50-make-sdimage.sh` creates `out/rp6-sd.img`: a FAT partition with the kernel, DTB
+   and extlinux.conf, then the `rp6-root` ext4 partition. Without a rootfs it creates a
+   kernel-only image, useful to check the display and the boot log.
+2. Write it to the microSD: `dd if=out/rp6-sd.img of=/dev/<sd> bs=4M conv=fsync`
+   (or with balenaEtcher or Raspberry Pi Imager).
+3. Power on while holding Vol down, set *Boot mode* to Linux and *Boot source* to SD card, then
+   *Start*. Holding Vol up at power-on goes back to Android.
+
+## License
+
+GPL-2.0-only, the same license as the Linux kernel; see [LICENSE](LICENSE). Patches in
+`kernel/patches/` keep their upstream authors' copyright.
