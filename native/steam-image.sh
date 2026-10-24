@@ -35,6 +35,7 @@ BOOT
 # it finish. Best effort: when it does not complete, the device does it on
 # first boot like rp6-native-setup.sh.
 if [ "${STEAM_PREUPDATE:-1}" = 1 ]; then
+	chroot_run apt-get update
 	chroot_run apt-get install -y xvfb xauth
 	mount -t proc proc "$R/proc"; mount --rbind /dev "$R/dev"; mount -t sysfs sys "$R/sys"
 	chroot_run /bin/sh -u <<-'UPD' || echo "Steam pre-update did not complete: the first boot will do it" >&2
