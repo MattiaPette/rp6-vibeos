@@ -6,6 +6,11 @@
 
 S=/home/deck/.local/share/Steam
 
+# The rootfs resolver is a symlink into /run: give the chroot the build host's
+# for the downloads below, and put the symlink back at the end.
+rm -f "$R/etc/resolv.conf"
+cp /etc/resolv.conf "$R/etc/resolv.conf"
+
 # Valve's ARM64 bootstrap.
 chroot_run /bin/sh -eu <<-'BOOT'
 	base=https://client-update.steamstatic.com
@@ -54,6 +59,8 @@ if [ "${STEAM_PREUPDATE:-1}" = 1 ]; then
 	rm -rf "$R"/var/lib/apt/lists/* "$R/tmp/steam-pre.log" "$R/tmp/dumps" "$R"/home/deck/.local/share/Steam/logs/*
 fi
 chroot_run chown -R deck:deck /home/deck/.local /home/deck/.steam
+rm -f "$R/etc/resolv.conf"
+ln -s /run/resolvconf/resolv.conf "$R/etc/resolv.conf"
 
 # The panel is natively portrait (1080x1920): rotate it from inside cage (the
 # weston variant does the same with transform=rotate-90 on DSI-1).
