@@ -4,6 +4,8 @@
 # The prototype uses systemd because Waydroid's container and session units
 # assume it; swapping it for a lighter init is a later trimming step.
 # Needs root, debootstrap and qemu-user-static (binfmt) when not on arm64.
+# Behind a TLS-intercepting proxy, set BUILD_CA=<proxy CA bundle>: it is
+# trusted inside the chroot during the build only, and removed afterwards.
 #
 # Output: $OUT/rootfs/ and $OUT/rootfs.tar.zst
 set -euo pipefail
@@ -19,6 +21,11 @@ debootstrap --arch=arm64 --variant=minbase \
 	"$DEBIAN_SUITE" "$R" "$DEBIAN_MIRROR"
 
 chroot_run() { chroot "$R" /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin DEBIAN_FRONTEND=noninteractive "$@"; }
+
+if [ -n "${BUILD_CA:-}" ]; then
+	install -Dm644 "$BUILD_CA" "$R/usr/local/share/ca-certificates/rp6-build-ca.crt"
+	chroot_run update-ca-certificates >/dev/null
+fi
 
 # Never pull docs, man pages or recommended extras.
 cat > "$R/etc/apt/apt.conf.d/90minimal" <<-EOF
@@ -45,23 +52,148 @@ chroot_run apt-get install -y \
 	libgl1-mesa-dri mesa-vulkan-drivers \
 	pipewire pipewire-pulse wireplumber alsa-ucm-conf \
 	seatd zram-tools \
-	kmscube vulkan-tools alsa-utils
+	kmscube vulkan-tools alsa-utils \
+	fdisk openresolv
 chroot_run apt-get clean
+if [ -n "${BUILD_CA:-}" ]; then
+	rm "$R/usr/local/share/ca-certificates/rp6-build-ca.crt"
+	chroot_run update-ca-certificates --fresh >/dev/null
+fi
 rm -rf "$R"/var/lib/apt/lists/*
+# debootstrap copied the build host's resolvers; iwd writes the real ones.
+rm -f "$R/etc/resolv.conf"
 
 # Retroid audio files, firmware and kernel modules from the earlier steps.
-for part in audio firmware; do
-	[ -d "$OUT/$part" ] && cp -a "$OUT/$part/." "$R/"
+# tar, not cp: /lib is a symlink to usr/lib in Debian and must stay one.
+# kgsl-shim/root is the /dev/kgsl-3d0 overlay from 16-build-kgsl-shim.sh.
+for part in audio firmware kernel/modules kgsl-shim/root; do
+	[ -d "$OUT/$part" ] || continue
+	tar -C "$OUT/$part" -cf - . | tar -C "$R" -xf - --keep-directory-symlink
 done
-[ -d "$OUT/kernel/modules/lib/modules" ] && cp -a "$OUT/kernel/modules/lib/modules" "$R/lib/"
+# The real KGSL from 15-build-kgsl.sh only binds with its own device tree,
+# which the SD image offers as a separate boot entry.
+if [ -f "$OUT/kgsl/msm_kgsl.ko" ]; then
+	kver=$(cat "$OUT/kernel/build/include/config/kernel.release")
+	install -Dm644 "$OUT/kgsl/msm_kgsl.ko" "$R/lib/modules/$kver/extra/msm_kgsl.ko"
+	depmod -b "$R" "$kver"
+fi
 
 # User that runs the kiosk session.
 chroot_run useradd -m -G video,render,audio,input deck
 chroot_run passwd -d deck
+# Prototype: root without password on the local consoles (tty2-6) for
+# debugging. There is no SSH server, so nothing is reachable over the network.
+chroot_run passwd -d root
 echo rp6 > "$R/etc/hostname"
 
 # zram: half of RAM as compressed swap, no disk swap.
 printf 'ALGO=zstd\nPERCENT=50\n' > "$R/etc/default/zramswap"
+
+# The FAT partition is /boot, so kernel updates and wifi.txt are reachable.
+cat > "$R/etc/fstab" <<-EOF
+	PARTLABEL=$ROOT_LABEL  /      ext4  defaults,noatime  0 1
+	PARTLABEL=rp6-boot     /boot  vfat  defaults,noatime,umask=0077  0 2
+EOF
+
+# Wi-Fi: iwd does DHCP itself and hands the DNS servers to resolvconf, which
+# needs no daemon (iwd's default is systemd-resolved). Credentials come from
+# wifi.txt on the FAT partition (two lines: network name, password), which is
+# easy to write from any computer before the first boot.
+install -Dm644 /dev/stdin "$R/etc/iwd/main.conf" <<-'EOF'
+	[General]
+	EnableNetworkConfiguration=true
+
+	[Network]
+	NameResolvingService=resolvconf
+EOF
+install -Dm755 /dev/stdin "$R/usr/local/sbin/rp6-wifi-from-boot" <<-'EOF'
+	#!/bin/sh
+	# Turn /boot/wifi.txt into an iwd profile, then delete it.
+	set -eu
+	f=/boot/wifi.txt
+	[ -f "$f" ] || exit 0
+	ssid=$(sed -n 1p "$f" | tr -d '\r')
+	pass=$(sed -n 2p "$f" | tr -d '\r')
+	[ -n "$ssid" ] || exit 0
+	# iwd names profiles after the SSID only when it is plain alphanumeric,
+	# space, - or _; any other SSID is written as = and its hex bytes.
+	case $ssid in
+	*[!A-Za-z0-9\ _-]*) name="=$(printf %s "$ssid" | od -An -tx1 | tr -d ' \n')" ;;
+	*) name=$ssid ;;
+	esac
+	mkdir -p /var/lib/iwd
+	umask 077
+	printf '[Security]\nPassphrase=%s\n' "$pass" > "/var/lib/iwd/$name.psk"
+	rm -f "$f"
+EOF
+install -Dm644 /dev/stdin "$R/etc/systemd/system/rp6-wifi-from-boot.service" <<-'EOF'
+	[Unit]
+	Description=Import Wi-Fi credentials from the boot partition
+	RequiresMountsFor=/boot
+	Before=iwd.service
+	ConditionPathExists=/boot/wifi.txt
+
+	[Service]
+	Type=oneshot
+	ExecStart=/usr/local/sbin/rp6-wifi-from-boot
+
+	[Install]
+	WantedBy=multi-user.target
+EOF
+
+# The image is only as big as the rootfs; grow the root partition and its
+# filesystem to the whole card on first boot, before Waydroid needs the space.
+install -Dm755 /dev/stdin "$R/usr/local/sbin/rp6-grow-root" <<-'EOF'
+	#!/bin/sh
+	# Grow the partition holding / to the end of its disk, then ext4 online.
+	set -eu
+	dev=$(findmnt -no SOURCE /)
+	name=${dev#/dev/}
+	disk=/dev/$(lsblk -no PKNAME "$dev")
+	part=$(cat "/sys/class/block/$name/partition")
+	sfdisk -q --relocate gpt-bak-std "$disk"
+	echo ', +' | sfdisk -q --no-reread --force -N "$part" "$disk"
+	partx -u -n "$part" "$disk"
+	resize2fs "$dev"
+	touch /var/lib/rp6-root-grown
+EOF
+install -Dm644 /dev/stdin "$R/etc/systemd/system/rp6-grow-root.service" <<-'EOF'
+	[Unit]
+	Description=Grow the root partition to the whole card
+	Before=waydroid-firstboot.service
+	ConditionPathExists=!/var/lib/rp6-root-grown
+
+	[Service]
+	Type=oneshot
+	ExecStart=/usr/local/sbin/rp6-grow-root
+
+	[Install]
+	WantedBy=multi-user.target
+EOF
+
+# Waydroid's Android images are about 1 GB and need network: download them on
+# the first boot that has Wi-Fi, before the kiosk starts.
+install -Dm644 /dev/stdin "$R/etc/systemd/system/waydroid-firstboot.service" <<-'EOF'
+	[Unit]
+	Description=Download Waydroid images on first boot
+	Wants=network-online.target
+	After=network-online.target
+	Before=waydroid-container.service kiosk.service
+	# waydroid init writes waydroid.cfg before downloading, so it is no proof
+	# that the images are there: use a marker written only on success.
+	ConditionPathExists=!/var/lib/rp6-waydroid-ready
+
+	[Service]
+	Type=oneshot
+	# iwd does not report "online", so retry within this one start job: the
+	# container and the kiosk stay ordered after a successful init.
+	ExecStart=/bin/sh -c 'until /usr/bin/waydroid init; do sleep 30; done'
+	ExecStartPost=/usr/bin/touch /var/lib/rp6-waydroid-ready
+	TimeoutStartSec=infinity
+
+	[Install]
+	WantedBy=multi-user.target
+EOF
 
 # Boot straight into Waydroid's full UI inside cage on tty1.
 install -Dm644 /dev/stdin "$R/etc/systemd/system/kiosk.service" <<-'EOF'
@@ -82,12 +214,16 @@ install -Dm644 /dev/stdin "$R/etc/systemd/system/kiosk.service" <<-'EOF'
 	[Install]
 	WantedBy=graphical.target
 EOF
-chroot_run systemctl enable kiosk.service waydroid-container.service zramswap.service iwd.service
+chroot_run systemctl enable kiosk.service waydroid-container.service zramswap.service iwd.service \
+	rp6-wifi-from-boot.service waydroid-firstboot.service rp6-grow-root.service
 chroot_run systemctl set-default graphical.target
 chroot_run systemctl disable getty@tty1.service || true
 # Units a handheld does not need.
 chroot_run systemctl mask apt-daily.timer apt-daily-upgrade.timer man-db.timer \
 	e2scrub_all.timer fstrim.timer systemd-timesyncd.service 2>/dev/null || true
+# Pulled in by Waydroid's lxc dependency: Waydroid sets up its own bridge and
+# starts its container itself. cage gets the seat from logind, not seatd.
+chroot_run systemctl disable lxc.service lxc-net.service lxc-monitord.service seatd.service
 
 tar -C "$R" -I 'zstd -19 -T0' -cf "$OUT/rootfs.tar.zst" .
 du -sh "$R" "$OUT/rootfs.tar.zst"
