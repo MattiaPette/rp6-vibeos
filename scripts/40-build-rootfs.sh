@@ -166,7 +166,8 @@ install -Dm755 /dev/stdin "$R/usr/local/sbin/rp6-grow-root" <<-'EOF'
 	set -eux
 	# Without an initramfs / shows up as /dev/root, so find the partition by
 	# its device number: /sys/dev/block/<maj:min> -> .../<disk>/<partition>.
-	sys=$(readlink -f "/sys/dev/block/$(findmnt -no MAJ:MIN /)")
+	# findmnt pads its column with spaces.
+	sys=$(readlink -f "/sys/dev/block/$(findmnt -no MAJ:MIN / | tr -d ' ')")
 	dev=/dev/$(basename "$sys")
 	disk=/dev/$(basename "$(dirname "$sys")")
 	part=$(cat "$sys/partition")
