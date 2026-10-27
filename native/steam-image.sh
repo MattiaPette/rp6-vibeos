@@ -47,11 +47,11 @@ if [ "${STEAM_PREUPDATE:-1}" = 1 ]; then
 			# Done once the update was applied and the real client started.
 			for i in $(seq 1 120); do
 				sleep 15
-				pgrep -f steamwebhelper >/dev/null && exit 0
-				grep -q "Update ... applied\|Nothing to do" $log 2>/dev/null && ! pgrep -f child-update-ui >/dev/null && exit 0
+				pgrep -x steamwebhelper >/dev/null && exit 0
 			done
 			exit 1'
 	UPD
+	[ -z "${STEAM_LOG_DIR:-}" ] || cp "$R"/tmp/steam-pre.log "$R"/home/deck/.local/share/Steam/logs/*.txt "$STEAM_LOG_DIR" 2>/dev/null || true
 	chroot_run pkill -u deck || true
 	sleep 3
 	umount -R "$R/dev" "$R/sys" "$R/proc" || true
