@@ -1,4 +1,4 @@
-# Sourced by scripts/40-build-rootfs.sh for VARIANT=native: Steam ARM64 inside
+# Sourced by scripts/40-build-rootfs.sh : Steam ARM64 inside
 # cage, no Android. Expects R, chroot_run and the deck user to exist.
 #
 # Valve's ARM64 bootstrap, done at build time so the first boot
