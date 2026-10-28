@@ -1,33 +1,31 @@
 # rp6-vibeos
 
 A minimal system for the Retroid Pocket 6 (QCS8550, 8 GB) whose only purpose is to run
-[DroidDeck](https://github.com/Droid-Deck/DroidDeck) while leaving as much RAM and storage as
-possible to games and the GPU.
+Steam while leaving as much RAM and storage as possible to games and the GPU. No Android.
 
-Architecture: Retroid's mainline 7.3 kernel → minimal Debian host → Waydroid (Android in a
-container, with only DroidDeck installed) shown full screen by `weston` (kiosk shell, rotated to landscape). Steam, Proton, FEX,
-DXVK and their updates stay managed by DroidDeck.
+Architecture: Retroid's mainline 7.3 kernel → minimal Debian (trixie) → `cage` (one-window
+Wayland compositor, with Xwayland) running Valve's native ARM64 Steam client in Big Picture
+mode, rotated to landscape → Proton ARM64 (it carries FEX for x86 games) → DXVK/VKD3D → Mesa
+Turnip on the mainline `msm` driver. Steam updates the client, Proton and the runtime itself.
 
 > Status: early prototype. The kernel-only test image boots from microSD and shows the kernel
-> log on the built-in display; the full rootfs has not been booted yet. GPU support inside
-> DroidDeck still needs work: DroidDeck looks for the Android KGSL driver (`/dev/kgsl-3d0`),
-> which the mainline kernel does not have. [gpu/](gpu/README.md) is the prototype that gives the
-> msm driver a KGSL face, plus an msm Turnip that DroidDeck can import.
+> log on the built-in display. Turnip works on the device (`vulkaninfo` reports Adreno 740).
+> Steam as a whole has not been verified to run yet.
 
 ## Build
 
 On an x86_64 or arm64 Linux host with `gcc-aarch64-linux-gnu`, `bc`, `flex`, `bison`,
 `libssl-dev`, `device-tree-compiler`, `m4`, `alsa-utils` (`alsatplg`), `dosfstools`,
-`mtools`, `e2fsprogs`, `fdisk` (`sfdisk`), `debootstrap`, `qemu-user-static`, `zstd`:
+`mtools`, `e2fsprogs`, `fdisk` (`sfdisk`), `debootstrap`, `qemu-user-static`, `zstd`
+(`scripts/40-build-rootfs.sh` also downloads Valve's Steam ARM64 bootstrap and can run its
+first self-update under Xvfb so the SD card does not extract it on first boot; set `STEAM_PREUPDATE=1` to try that; it currently fails):
 
 ```sh
 scripts/01-fetch-sources.sh            # kernel, topology, UCM, linux-firmware (only the files needed)
 scripts/10-build-kernel.sh             # RP6 config + drivers derived from the device tree
-scripts/15-build-kgsl.sh               # optional, experimental: KGSL GPU driver + its DTB
-scripts/16-build-kgsl-shim.sh          # or instead: msm + a KGSL-style sysfs and node for DroidDeck (gpu/README.md)
 scripts/20-build-audio.sh              # AudioReach topology + UCM
 scripts/30-collect-firmware.sh <dump>  # generic firmware + signed blobs from stock Android
-sudo scripts/40-build-rootfs.sh        # Debian minbase + Waydroid + weston (BUILD_CA=<pem> behind a TLS proxy)
+sudo scripts/40-build-rootfs.sh        # Debian minbase + cage + Steam ARM64 (BUILD_CA=<pem> behind a TLS proxy)
 sudo scripts/50-make-sdimage.sh        # microSD image for OpenABL (no root needed without a rootfs)
 ```
 
@@ -37,15 +35,6 @@ config does not have to be written by hand. `kernel/rp6-slim.config` and a gener
 drop what arm64 defconfig builds for other hardware (other Qualcomm SoCs, NICs, cameras, codecs,
 Type-C chips...), and `kernel/rp6.config` comes last with the RP6's own choices. The build
 prints any symbol the device tree or `rp6.config` asks for that Kconfig refused.
-
-## Experimental: Qualcomm KGSL GPU driver
-
-DroidDeck's Turnip expects the Android GPU driver, KGSL (`/dev/kgsl-3d0`). As a fallback to
-faking that node on top of msm, `scripts/15-build-kgsl.sh` builds Qualcomm's KGSL
-(`msm_kgsl.ko`, pinned in `config.env`) against the 7.3 kernel with the patch in
-`kgsl/patches/`, and an RP6 device tree (`kgsl/dts/`) that gives the GPU to KGSL while msm
-keeps driving the display. It runs after `10-build-kernel.sh` and writes to `out/kgsl/`. It
-builds, but has not been tried on the device yet.
 
 ## Signed firmware
 
@@ -87,7 +76,7 @@ first. To check the version: `fastboot getvar version-bootloader`.
 4. The kernel-only image saves the boot logs to `rp6-log/` on the FAT partition (`RP6BOOT`)
    for 2 minutes, readable from any computer.
 
-## Wi-Fi and Waydroid on first boot
+## Wi-Fi and Steam on first boot
 
 Before the first boot, create `wifi.txt` on the `RP6BOOT` FAT partition with two lines: the
 network name and the password. Three more optional lines set a static IPv4 address instead of
@@ -101,13 +90,11 @@ MyPassword
 ```
 
 At boot the system turns it into an iwd profile and deletes the file. The first boot also grows
-the root partition to the whole card; its log is `rp6-grow-root.log` on `RP6BOOT`. On the first boot with network, `waydroid init` downloads the Android images (about
-1 GB); then Waydroid's UI starts full screen.
+the root partition to the whole card; its log is `rp6-grow-root.log` on `RP6BOOT`. Steam then starts full screen in cage; log in with the on-screen
+keyboard or a controller. If the client was not updated at build time, the first start downloads
+and extracts about 670 MB, which takes many minutes on a microSD: do not power off meanwhile.
 
-When `scripts/15-build-kgsl.sh` has run, the image has a second boot entry,
-`rp6-vibeos-kgsl`, that boots the KGSL device tree and keeps the kgsl-shim unloaded.
-
-There is no login prompt on the screen: `deck` (no password) runs the kiosk. For debugging,
+There is no login prompt on the screen: `deck` (no password) runs Steam (`steam-session.service`). For debugging,
 switch to tty2 (`Ctrl+Alt+F2` with a USB keyboard) and log in as `root` (no password on this
 prototype image).
 

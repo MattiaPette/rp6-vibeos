@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Build the host rootfs: Debian minbase + Waydroid + a kiosk compositor.
+# Build the host rootfs: Debian minbase + cage + Valve's Steam ARM64 client.
 #
-# The prototype uses systemd because Waydroid's container and session units
-# assume it; swapping it for a lighter init is a later trimming step.
+# Steam runs fullscreen in cage (a one-window wlroots compositor) on tty1,
+# started by systemd; the client is baked into /home/deck so the first boot
+# does not download it.
+#
 # Needs root, debootstrap and qemu-user-static (binfmt) when not on arm64.
 # Behind a TLS-intercepting proxy, set BUILD_CA=<proxy CA bundle>: it is
 # trusted inside the chroot during the build only, and removed afterwards.
@@ -41,24 +43,21 @@ cat > "$R/etc/dpkg/dpkg.cfg.d/90nodoc" <<-EOF
 	path-include=/usr/share/doc/*/copyright
 EOF
 
-# Waydroid's own repository (the Debian package lags behind).
-curl -fsSL https://repo.waydro.id/waydroid.gpg -o "$R/usr/share/keyrings/waydroid.gpg"
-echo "deb [signed-by=/usr/share/keyrings/waydroid.gpg] https://repo.waydro.id/ $DEBIAN_SUITE main" \
-	> "$R/etc/apt/sources.list.d/waydroid.list"
-
+# gamescope is not packaged for arm64: cage + Xwayland, plus the libraries
+# Valve's ARM64 client links against (only found out after its first update:
+# libxtst6 and friends are for steamui.so, lsof for the UI to connect to the
+# client; without lsof the UI shows "unexpected transport error").
 chroot_run apt-get update
 chroot_run apt-get install -y \
-	waydroid weston bluez \
+	cage xwayland wlr-randr procps unzip libgtk2.0-0t64 libnss3 libvdpau1 libxss1 libpci3 libvpx9 \
+	libxtst6 libva2 libopenal1 libibus-1.0-5 libatk-bridge2.0-0t64 libatspi2.0-0t64 libnm0 lsof \
+	bluez \
 	libgl1-mesa-dri mesa-vulkan-drivers \
 	pipewire pipewire-pulse wireplumber alsa-ucm-conf \
-	seatd zram-tools \
+	zram-tools \
 	kmscube vulkan-tools alsa-utils \
 	fdisk e2fsprogs openresolv dropbear-bin systemd-timesyncd
 chroot_run apt-get clean
-# The slim kernel only has the nftables backend. waydroid-net.sh prefers
-# iptables-legacy when present, which fails without ip_tables.ko, so drop the
-# legacy binaries and let it fall back to iptables (= iptables-nft).
-rm -f "$R"/usr/sbin/{iptables,ip6tables}-legacy{,-save,-restore}
 if [ -n "${BUILD_CA:-}" ]; then
 	rm "$R/usr/local/share/ca-certificates/rp6-build-ca.crt"
 	chroot_run update-ca-certificates --fresh >/dev/null
@@ -75,20 +74,11 @@ grep -q '^resolv_conf=/run/resolvconf/resolv.conf$' "$R/etc/resolvconf.conf" \
 
 # Retroid audio files, firmware and kernel modules from the earlier steps.
 # tar, not cp: /lib is a symlink to usr/lib in Debian and must stay one.
-# kgsl-shim/root is the /dev/kgsl-3d0 overlay from 16-build-kgsl-shim.sh.
-for part in audio firmware kernel/modules kgsl-shim/root; do
+for part in audio firmware kernel/modules; do
 	[ -d "$OUT/$part" ] || continue
 	tar -C "$OUT/$part" -cf - . | tar -C "$R" -xf - --keep-directory-symlink
 done
-# The real KGSL from 15-build-kgsl.sh only binds with its own device tree,
-# which the SD image offers as a separate boot entry.
-if [ -f "$OUT/kgsl/msm_kgsl.ko" ]; then
-	kver=$(cat "$OUT/kernel/build/include/config/kernel.release")
-	install -Dm644 "$OUT/kgsl/msm_kgsl.ko" "$R/lib/modules/$kver/extra/msm_kgsl.ko"
-	depmod -b "$R" "$kver"
-fi
-
-# User that runs the kiosk session.
+# User that runs the Steam session.
 chroot_run useradd -m -G video,render,audio,input deck
 chroot_run passwd -d deck
 # Prototype: root without password on the local consoles (tty2-6) for
@@ -174,7 +164,7 @@ install -Dm644 /dev/stdin "$R/etc/systemd/system/rp6-wifi-from-boot.service" <<-
 EOF
 
 # The image is only as big as the rootfs; grow the root partition and its
-# filesystem to the whole card on first boot, before Waydroid needs the space.
+# filesystem to the whole card on first boot, before Steam updates itself.
 install -Dm755 /dev/stdin "$R/usr/local/sbin/rp6-grow-root" <<-'EOF'
 	#!/bin/sh
 	# Grow the partition holding / to the end of its disk, then ext4 online.
@@ -196,7 +186,7 @@ EOF
 install -Dm644 /dev/stdin "$R/etc/systemd/system/rp6-grow-root.service" <<-'EOF'
 	[Unit]
 	Description=Grow the root partition to the whole card
-	Before=waydroid-firstboot.service
+	Before=steam-session.service
 	RequiresMountsFor=/boot
 	ConditionPathExists=!/var/lib/rp6-root-grown
 
@@ -258,72 +248,9 @@ install -Dm644 /dev/stdin "$R/etc/systemd/system/dropbear@.service" <<-'EOF'
 	StandardError=journal
 EOF
 
-# Waydroid's Android images are about 1 GB and need network: download them on
-# the first boot that has Wi-Fi, before the kiosk starts.
-install -Dm644 /dev/stdin "$R/etc/systemd/system/waydroid-firstboot.service" <<-'EOF'
-	[Unit]
-	Description=Download Waydroid images on first boot
-	Wants=network-online.target
-	After=network-online.target
-	Before=waydroid-container.service kiosk.service
-	# waydroid init writes waydroid.cfg before downloading, so it is no proof
-	# that the images are there: use a marker written only on success.
-	ConditionPathExists=!/var/lib/rp6-waydroid-ready
-
-	[Service]
-	Type=oneshot
-	# iwd does not report "online", so retry within this one start job: the
-	# container and the kiosk stay ordered after a successful init.
-	ExecStart=/bin/sh -c 'until /usr/bin/waydroid init; do sleep 30; done'
-	ExecStartPost=/usr/bin/touch /var/lib/rp6-waydroid-ready
-	TimeoutStartSec=infinity
-
-	[Install]
-	WantedBy=multi-user.target
-EOF
-
-# The panel is natively portrait (1080x1920, DT rotation=270) and cage cannot
-# rotate its output, so use weston's kiosk shell, which can.
-install -Dm644 /dev/stdin "$R/etc/rp6/weston.ini" <<-'EOF2'
-	[core]
-	shell=kiosk-shell.so
-	idle-time=0
-
-	[output]
-	name=DSI-1
-	transform=rotate-90
-
-	[autolaunch]
-	path=/usr/local/bin/rp6-waydroid-ui
-	watch=true
-EOF2
-# weston's [autolaunch] takes no arguments, hence the wrapper.
-install -Dm755 /dev/stdin "$R/usr/local/bin/rp6-waydroid-ui" <<-'EOF2'
-	#!/bin/sh
-	exec /usr/bin/waydroid show-full-ui
-EOF2
-
-# Boot straight into Waydroid's full UI inside weston on tty1.
-install -Dm644 /dev/stdin "$R/etc/systemd/system/kiosk.service" <<-'EOF'
-	[Unit]
-	Description=Waydroid kiosk
-	After=systemd-user-sessions.service waydroid-container.service
-	Wants=waydroid-container.service
-
-	[Service]
-	User=deck
-	PAMName=login
-	TTYPath=/dev/tty1
-	StandardInput=tty
-	Environment=XDG_SESSION_TYPE=wayland
-	ExecStart=/usr/bin/weston --config=/etc/rp6/weston.ini --socket=wayland-1
-	Restart=always
-
-	[Install]
-	WantedBy=graphical.target
-EOF
-chroot_run systemctl enable kiosk.service waydroid-container.service zramswap.service iwd.service \
-	rp6-wifi-from-boot.service waydroid-firstboot.service rp6-grow-root.service \
+. "$(dirname "$0")/../native/steam-image.sh"
+chroot_run systemctl enable steam-session.service zramswap.service iwd.service \
+	rp6-wifi-from-boot.service rp6-grow-root.service \
 	rp6-ssh-keys-from-boot.service dropbear.socket systemd-timesyncd.service
 chroot_run systemctl set-default graphical.target
 chroot_run systemctl disable getty@tty1.service || true
@@ -334,7 +261,7 @@ install -Dm644 /dev/stdin "$R/etc/systemd/logind.conf.d/10-rp6-power-key.conf" <
 	HandlePowerKey=ignore
 	HandlePowerKeyLongPress=poweroff
 EOF
-# Android has no lights HAL here, so brightness lives on the host backlight.
+# Brightness lives on the host backlight.
 # Start at half on the first boot only; later boots keep whatever was set.
 install -Dm755 /dev/stdin "$R/usr/local/bin/rp6-brightness" <<-'EOF2'
 	#!/bin/sh
@@ -347,7 +274,7 @@ install -Dm644 /dev/stdin "$R/etc/systemd/system/rp6-brightness.service" <<-'EOF
 	[Unit]
 	Description=Set a sane first-boot brightness
 	ConditionPathExists=!/var/lib/rp6-brightness-set
-	Before=kiosk.service
+	Before=steam-session.service
 
 	[Service]
 	Type=oneshot
@@ -383,9 +310,5 @@ chroot_run systemctl enable rp6-brightness.service bluetooth.service rp6-stable-
 # Units a handheld does not need.
 chroot_run systemctl mask apt-daily.timer apt-daily-upgrade.timer man-db.timer \
 	e2scrub_all.timer fstrim.timer 2>/dev/null || true
-# Pulled in by Waydroid's lxc dependency: Waydroid sets up its own bridge and
-# starts its container itself. weston gets the seat from logind, not seatd.
-chroot_run systemctl disable lxc.service lxc-net.service lxc-monitord.service seatd.service
-
 tar -C "$R" -I 'zstd -19 -T0' -cf "$OUT/rootfs.tar.zst" .
 du -sh "$R" "$OUT/rootfs.tar.zst"
