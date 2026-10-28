@@ -69,6 +69,10 @@ install -Dm755 /dev/stdin "$R/usr/local/bin/rp6-steam-launch" <<-'EOF2'
 	#!/bin/sh
 	out=$(wlr-randr | awk '/^[^ ]/{print $1; exit}')
 	[ -n "$out" ] && wlr-randr --output "$out" --transform 90
+	# Wi-Fi is not up yet at boot and iwd never reports "online" (so
+	# network-online.target does not wait for it): without the network the
+	# first self-update fails and Steam dies on a missing steamui.so.
+	until curl -fsS -m 10 -o /dev/null https://client-update.steamstatic.com/steam_client_publicbeta_linuxarm64; do sleep 3; done
 	exec /home/deck/.local/share/Steam/steamrtarm64/steam -gamepadui -noverifyfiles
 EOF2
 install -Dm644 /dev/stdin "$R/etc/systemd/system/steam-session.service" <<-'EOF2'
