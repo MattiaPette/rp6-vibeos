@@ -17,8 +17,8 @@ Turnip on the mainline `msm` driver. Steam updates the client, Proton and the ru
 On an x86_64 or arm64 Linux host with `gcc-aarch64-linux-gnu`, `bc`, `flex`, `bison`,
 `libssl-dev`, `device-tree-compiler`, `m4`, `alsa-utils` (`alsatplg`), `dosfstools`,
 `mtools`, `e2fsprogs`, `fdisk` (`sfdisk`), `debootstrap`, `qemu-user-static`, `zstd`
-(`scripts/40-build-rootfs.sh` also downloads Valve's Steam ARM64 bootstrap and, best effort, runs its
-first self-update under Xvfb so the SD card does not extract it on first boot; `STEAM_PREUPDATE=0` skips that):
+(`scripts/40-build-rootfs.sh` also downloads Valve's Steam ARM64 bootstrap and can run its
+first self-update under Xvfb so the SD card does not extract it on first boot; set `STEAM_PREUPDATE=1` to try that; it currently fails):
 
 ```sh
 scripts/01-fetch-sources.sh            # kernel, topology, UCM, linux-firmware (only the files needed)

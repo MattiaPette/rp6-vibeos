@@ -30,11 +30,12 @@ chroot_run /bin/sh -eu <<-'BOOT'
 	chmod +x "$S"/steamrtarm64/* "$S"/*.sh 2>/dev/null || true
 BOOT
 
-# First self-update (~670 MB download, ~2 GB extracted): on the SD card it
+# Optional first self-update, STEAM_PREUPDATE=1 (off: the client asserts under
+# Xvfb in the build chroot, not solved yet). ~670 MB download, ~2 GB extracted; on the SD card it
 # takes more than ten minutes, so run the client once here under Xvfb and let
 # it finish. Best effort: when it does not complete, the device does it on
 # first boot as usual.
-if [ "${STEAM_PREUPDATE:-1}" = 1 ]; then
+if [ "${STEAM_PREUPDATE:-0}" = 1 ]; then
 	chroot_run apt-get update
 	chroot_run apt-get install -y xvfb xauth
 	mount -t proc proc "$R/proc"; mount --rbind /dev "$R/dev"; mount -t sysfs sys "$R/sys"
