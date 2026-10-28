@@ -1,7 +1,7 @@
 # Sourced by scripts/40-build-rootfs.sh for VARIANT=native: Steam ARM64 inside
 # cage, no Android. Expects R, chroot_run and the deck user to exist.
 #
-# Same bootstrap as rp6-native-setup.sh, done at build time so the first boot
+# Valve's ARM64 bootstrap, done at build time so the first boot
 # does not download it. The kernel must use 4K pages (arm64 default).
 
 S=/home/deck/.local/share/Steam
@@ -33,7 +33,7 @@ BOOT
 # First self-update (~670 MB download, ~2 GB extracted): on the SD card it
 # takes more than ten minutes, so run the client once here under Xvfb and let
 # it finish. Best effort: when it does not complete, the device does it on
-# first boot like rp6-native-setup.sh.
+# first boot as usual.
 if [ "${STEAM_PREUPDATE:-1}" = 1 ]; then
 	chroot_run apt-get update
 	chroot_run apt-get install -y xvfb xauth
@@ -63,8 +63,7 @@ chroot_run chown -R deck:deck /home/deck/.local /home/deck/.steam
 rm -f "$R/etc/resolv.conf"
 ln -s /run/resolvconf/resolv.conf "$R/etc/resolv.conf"
 
-# The panel is natively portrait (1080x1920): rotate it from inside cage (the
-# weston variant does the same with transform=rotate-90 on DSI-1).
+# The panel is natively portrait (1080x1920): rotate it from inside cage.
 install -Dm755 /dev/stdin "$R/usr/local/bin/rp6-steam-launch" <<-'EOF2'
 	#!/bin/sh
 	out=$(wlr-randr | awk '/^[^ ]/{print $1; exit}')
