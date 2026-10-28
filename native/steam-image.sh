@@ -96,3 +96,12 @@ install -Dm644 /dev/stdin "$R/etc/systemd/system/steam-session.service" <<-'EOF2
 	[Install]
 	WantedBy=graphical.target
 EOF2
+
+# The gamepad reports its sticks as absolute axes, which libinput in cage turns
+# into a mouse pointer: hide it from the compositor, Steam reads it via evdev.
+# The panel is natively portrait and cage rotates it, so rotate touch to match.
+install -Dm644 /dev/stdin "$R/etc/udev/rules.d/70-rp6-input.rules" <<-'EOF2'
+	SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="RetroidPocket Gamepad", ENV{ID_INPUT_MOUSE}="", ENV{ID_INPUT_JOYSTICK}="1", ENV{LIBINPUT_IGNORE_DEVICE}="1"
+	SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="generic ft5x06*", ENV{LIBINPUT_CALIBRATION_MATRIX}="0 -1 1 1 0 0"
+EOF2
+install -Dm755 "$(dirname "${BASH_SOURCE[0]}")/rp6-native-ram.sh" "$R/usr/local/bin/rp6-native-ram.sh"

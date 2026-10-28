@@ -44,10 +44,13 @@ cat > "$R/etc/dpkg/dpkg.cfg.d/90nodoc" <<-EOF
 EOF
 
 # gamescope is not packaged for arm64: cage + Xwayland, plus the libraries
-# Valve's ARM64 client links against.
+# Valve's ARM64 client links against (only found out after its first update:
+# libxtst6 and friends are for steamui.so, lsof for the UI to connect to the
+# client; without lsof the UI shows "unexpected transport error").
 chroot_run apt-get update
 chroot_run apt-get install -y \
 	cage xwayland wlr-randr procps unzip libgtk2.0-0t64 libnss3 libvdpau1 libxss1 libpci3 libvpx9 \
+	libxtst6 libva2 libopenal1 libibus-1.0-5 libatk-bridge2.0-0t64 libatspi2.0-0t64 libnm0 lsof \
 	bluez \
 	libgl1-mesa-dri mesa-vulkan-drivers \
 	pipewire pipewire-pulse wireplumber alsa-ucm-conf \
